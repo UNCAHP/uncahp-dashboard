@@ -210,9 +210,15 @@ function FunnelHeader({
 }
 
 function StepsTab({ funnel }: { funnel: FunnelBreakdown }) {
-  const [activeStepId, setActiveStepId] = useState<string>(
-    funnel.steps[0]?.step_id ?? '',
-  );
+  // Default to the step with the most deposits — that's where the real data lives.
+  // (LP steps will always show 0 because deposits are attributed to the deposit page.)
+  const defaultStepId = useMemo(() => {
+    const withDeposits = [...funnel.steps]
+      .filter(s => s.step_deposits > 0)
+      .sort((a, b) => b.step_deposits - a.step_deposits)[0];
+    return withDeposits?.step_id ?? funnel.steps[0]?.step_id ?? '';
+  }, [funnel.steps]);
+  const [activeStepId, setActiveStepId] = useState<string>(defaultStepId);
   const activeStep = funnel.steps.find(s => s.step_id === activeStepId) ?? funnel.steps[0];
   if (!activeStep) {
     return (
@@ -237,7 +243,9 @@ function StepsTab({ funnel }: { funnel: FunnelBreakdown }) {
           <div className="mt-0.5 text-xs text-fg-muted">
             {activeStep.pages.length === 1
               ? 'Single page · no split test running'
-              : `${activeStep.pages.length}-way split test · ${formatNumber(activeStep.step_deposits)} deposits across variants`}
+              : activeStep.step_deposits > 0
+                ? `${activeStep.pages.length}-way split test · ${formatNumber(activeStep.step_deposits)} deposits across variants`
+                : `${activeStep.pages.length}-way split test · deposits aren't attributed at this step (only the deposit page captures payments)`}
           </div>
         </div>
 
@@ -322,6 +330,7 @@ function StepNavigator({
                   </div>
                   <div className="mt-0.5 text-[9px] text-fg-dim">
                     {step.pages.length} {step.pages.length === 1 ? 'variant' : 'variants'}
+                    {step.step_deposits > 0 && ` · ${step.step_deposits} deposits`}
                   </div>
                 </div>
               </div>
@@ -368,7 +377,6 @@ function VariantCard({
             </span>
           )}
         </div>
-        <span className="text-[10px] text-fg-dim">deposits-led</span>
       </div>
 
       <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden border-b border-border bg-gradient-to-br from-surface to-surface-2">
