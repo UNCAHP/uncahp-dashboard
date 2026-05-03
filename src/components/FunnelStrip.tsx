@@ -101,7 +101,7 @@ export function FunnelStrip({
                       width: `${width}%`,
                       background: stage.isCurrency
                         ? 'linear-gradient(90deg, rgba(74,222,128,0.25), rgba(74,222,128,0.06))'
-                        : 'linear-gradient(90deg, rgba(236,72,153,0.18), rgba(236,72,153,0.04))',
+                        : 'linear-gradient(90deg, rgba(247,165,222,0.22), rgba(247,165,222,0.05))',
                     }}
                   />
                 )}

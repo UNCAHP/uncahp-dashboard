@@ -9,8 +9,8 @@
   --color-fg: #f5f5f5;
   --color-fg-muted: #8a8a8a;
   --color-fg-dim: #555555;
-  --color-pink: #ec4899;
-  --color-pink-soft: #f472b6;
+  --color-pink: #f7a5de;
+  --color-pink-soft: #fbc7e9;
   --color-green: #4ade80;
   --color-yellow: #facc15;
   --color-red: #f87171;
@@ -29,6 +29,6 @@ html, body {
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: #0a0a0a; }
 ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(236, 72, 153, 0.5); }
+::-webkit-scrollbar-thumb:hover { background: rgba(247, 165, 222, 0.5); }
 
 .tabular-nums { font-variant-numeric: tabular-nums; }
