@@ -24,6 +24,7 @@ export function Topbar({
   rangeLabel,
   view,
   client,
+  funnel,
   days,
 }: {
   title: string;
@@ -32,6 +33,7 @@ export function Topbar({
   rangeLabel: string;
   view?: string;
   client?: string;
+  funnel?: string;
   days: number;
 }) {
   const stale = freshness.is_stale;
@@ -39,6 +41,7 @@ export function Topbar({
     const p = new URLSearchParams();
     if (view && view !== 'overview') p.set('view', view);
     if (client) p.set('client', client);
+    if (funnel) p.set('funnel', funnel);
     p.set('days', String(d));
     return `/?${p.toString()}`;
   };

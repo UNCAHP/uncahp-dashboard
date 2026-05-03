@@ -10,8 +10,9 @@ import { ClientTableV2 } from '@/components/ClientTableV2';
 import { FunnelBreakdown } from '@/components/FunnelBreakdown';
 import { AdTable } from '@/components/AdTable';
 import { PlaceholderView } from '@/components/PlaceholderView';
+import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
 import {
-  defaultRange, getPortfolio, getAdAttribution, getClientList, getFunnelBreakdown,
+  defaultRange, getPortfolio, getAdAttribution, getClientList, getFunnelBreakdown, getFunnelList,
   ROLLOUT_COMPLETE_CLIENT_IDS, type ClientRow, type Totals,
 } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
@@ -21,7 +22,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'clients' | 'admin';
-type SearchParams = { days?: string; client?: string; view?: string };
+type SearchParams = { days?: string; client?: string; view?: string; funnel?: string };
 
 function parseView(v: string | undefined): View {
   const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'clients', 'admin'];
@@ -33,24 +34,37 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   const days = Math.max(1, Math.min(365, Number(params.days) || 30));
   const range = defaultRange(days);
   const clientFilter = params.client?.trim() || undefined;
+  const funnelFilter = params.funnel?.trim() || undefined;
   const view = parseView(params.view);
 
-  // For Overview/Funnel views we want portfolio totals (no client filter).
-  // For Client view, scope to that client.
+  // For Overview views we want portfolio totals (no client filter).
+  // For Client view, scope to that client. Funnel view uses its own client selector.
   const scopedClient = view === 'client' ? clientFilter : undefined;
+  const funnelClientId = view === 'funnel' ? clientFilter : undefined;
 
   const adClientIds = scopedClient
     ? (ROLLOUT_COMPLETE_CLIENT_IDS.includes(scopedClient) ? [scopedClient] : [])
     : ROLLOUT_COMPLETE_CLIENT_IDS;
 
-  const [{ rows, totals, freshness }, adRows, clients, funnelBreakdown] = await Promise.all([
+  const [{ rows, totals, freshness }, adRows, clients, funnelBreakdown, funnelList, funnelAnalyticsBreakdown] = await Promise.all([
     getPortfolio(range, scopedClient),
     view === 'client' ? getAdAttribution(range, adClientIds) : Promise.resolve([]),
     getClientList(),
     view === 'client' && scopedClient
       ? getFunnelBreakdown(scopedClient, range)
       : Promise.resolve([]),
+    view === 'funnel' ? getFunnelList() : Promise.resolve([]),
+    view === 'funnel' && funnelClientId
+      ? getFunnelBreakdown(funnelClientId, range)
+      : Promise.resolve([]),
   ]);
+
+  const selectedAnalyticsFunnel = funnelAnalyticsBreakdown.find(f => f.funnel_id === funnelFilter)
+    ?? funnelAnalyticsBreakdown.find(f => !f.is_synthetic)
+    ?? null;
+  const funnelClientName = funnelClientId
+    ? clients.find(c => c.client_id === funnelClientId)?.client_name ?? null
+    : null;
 
   const activeClient = scopedClient ? clients.find(c => c.client_id === scopedClient) : null;
 
@@ -73,7 +87,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
           freshness={freshness}
           rangeLabel={`${range.since} → ${range.until}`}
           view={view}
-          client={scopedClient}
+          client={view === 'funnel' ? funnelClientId : scopedClient}
+          funnel={funnelFilter}
           days={days}
         />
         {view === 'overview' && <OverviewView rows={rows} totals={totals} days={days} />}
@@ -90,7 +105,16 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
             <NoClientSelected />
           )
         )}
-        {view === 'funnel' && <PlaceholderView title="Funnel Analytics" subtitle="Redesigning in Artifacts — wire-up coming next." />}
+        {view === 'funnel' && (
+          <FunnelAnalyticsView
+            funnelList={funnelList}
+            funnel={selectedAnalyticsFunnel}
+            funnelClientId={funnelClientId ?? null}
+            funnelClientName={funnelClientName}
+            selectedFunnelId={selectedAnalyticsFunnel?.funnel_id ?? null}
+            days={days}
+          />
+        )}
         {view === 'calls' && <PlaceholderView title="Call Tracking" subtitle="Inbound call performance and recordings" />}
         {view === 'clients' && <PlaceholderView title="Clients" subtitle="Manage client accounts, contracts and team access" />}
         {view === 'admin' && <PlaceholderView title="Admin Panel" subtitle="Team, integrations and workspace settings" />}

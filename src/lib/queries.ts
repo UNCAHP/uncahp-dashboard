@@ -104,7 +104,7 @@ export async function getPortfolio(
 ): Promise<{ rows: ClientRow[]; totals: Totals; freshness: FreshnessReport }> {
   type MetaRow = { client_id: string; client_name: string | null; spend_cents: number | null; leads: number | null; purchases: number | null; actions: unknown };
   type ContactRow = { location_id: string };
-  type OppRow = { location_id: string };
+  type OppRow = { location_id: string; contact_id: string | null };
 
   const buildMetaQ = () => {
     let q = supabase
@@ -128,10 +128,32 @@ export async function getPortfolio(
   const buildOppsQ = () => {
     let q = supabase
       .from('ghl_opportunities')
-      .select('location_id')
+      .select('location_id, contact_id')
       .gte('created_at', `${range.since}T00:00:00Z`)
       .lte('created_at', `${range.until}T23:59:59Z`)
       .eq('status', 'won');
+    if (clientFilter) q = q.eq('location_id', clientFilter);
+    return q;
+  };
+  const buildTxnsQ = () => {
+    let q = supabase
+      .from('ghl_transactions')
+      .select('location_id, amount_cents, contact_source_id, entity_source_id')
+      .eq('status', 'succeeded')
+      .gte('charge_created_at', `${range.since}T00:00:00Z`)
+      .lte('charge_created_at', `${range.until}T23:59:59Z`);
+    if (clientFilter) q = q.eq('location_id', clientFilter);
+    return q;
+  };
+  const buildFunnelsQ = () => {
+    let q = supabase.from('ghl_funnels').select('location_id, source_id');
+    if (clientFilter) q = q.eq('location_id', clientFilter);
+    return q;
+  };
+  // Locations that have GHL transactions synced at all (any date) — used to know
+  // whether to trust a 0 count from GHL, or fall back to Meta pixel for that client.
+  const buildTxnsCoverageQ = () => {
+    let q = supabase.from('ghl_transactions').select('location_id').limit(1000);
     if (clientFilter) q = q.eq('location_id', clientFilter);
     return q;
   };
@@ -155,13 +177,59 @@ export async function getPortfolio(
     metaFreshQ = metaFreshQ.neq('client_id', 'UNCAHP_AGENCY');
   }
 
-  const [spendData, leadsData, bookingsData, freshnessMeta, freshnessGhl] = await Promise.all([
+  type TxnRow = {
+    location_id: string;
+    amount_cents: number | null;
+    contact_source_id: string | null;
+    entity_source_id: string | null;
+  };
+  type TxnCoverageRow = { location_id: string };
+  type FunnelRow = { location_id: string; source_id: string };
+  const [spendData, leadsData, bookingsData, txnsData, txnsCoverage, funnelsData, freshnessMeta, freshnessGhl] = await Promise.all([
     fetchAll<MetaRow>(buildMetaQ),
     fetchAll<ContactRow>(buildContactsQ),
     fetchAll<OppRow>(buildOppsQ),
+    fetchAll<TxnRow>(buildTxnsQ),
+    fetchAll<TxnCoverageRow>(buildTxnsCoverageQ),
+    fetchAll<FunnelRow>(buildFunnelsQ),
     metaFreshQ,
     ghlFreshQ,
   ]);
+
+  // Funnel IDs per client — used to count "purchases" as funnel-attributed only.
+  const funnelIdsByClient = new Map<string, Set<string>>();
+  for (const f of funnelsData) {
+    const set = funnelIdsByClient.get(f.location_id) ?? new Set<string>();
+    set.add(f.source_id);
+    funnelIdsByClient.set(f.location_id, set);
+  }
+
+  // Per-client funnel-attributed purchase counts (succeeded transactions whose
+  // entity_source_id matches a known funnel for that client).
+  const ghlPurchasesByClient = new Map<string, number>();
+  for (const t of txnsData) {
+    const funnels = funnelIdsByClient.get(t.location_id);
+    if (!funnels || !t.entity_source_id || !funnels.has(t.entity_source_id)) continue;
+    ghlPurchasesByClient.set(t.location_id, (ghlPurchasesByClient.get(t.location_id) ?? 0) + 1);
+  }
+  const clientsWithGhlTxnCoverage = new Set<string>();
+  for (const r of txnsCoverage) clientsWithGhlTxnCoverage.add(r.location_id);
+
+  // Bookings: unique customers who either paid any deposit (funnel OR direct)
+  // or have a won opportunity (e.g. phone-booked, no online payment).
+  const bookingContactsByClient = new Map<string, Set<string>>();
+  for (const t of txnsData) {
+    if (!t.contact_source_id) continue;
+    const set = bookingContactsByClient.get(t.location_id) ?? new Set<string>();
+    set.add(t.contact_source_id);
+    bookingContactsByClient.set(t.location_id, set);
+  }
+  for (const o of bookingsData) {
+    if (!o.contact_id) continue;
+    const set = bookingContactsByClient.get(o.location_id) ?? new Set<string>();
+    set.add(o.contact_id);
+    bookingContactsByClient.set(o.location_id, set);
+  }
 
   // Aggregate spend + funnel events per client (from meta_daily_stats)
   type MetaAccum = {
@@ -185,8 +253,16 @@ export async function getPortfolio(
     cur.lp_leads += extractAction(r.actions, 'offsite_conversion.fb_pixel_lead');
     cur.lf_leads += extractAction(r.actions, 'onsite_conversion.lead_grouped');
     cur.checkouts += extractAction(r.actions, 'initiate_checkout');
+    // Meta pixel purchases — kept as a fallback when no GHL transaction coverage
     cur.purchases += (r.purchases ?? extractAction(r.actions, 'purchase')) || 0;
     metaByClient.set(r.client_id, cur);
+  }
+  // Override purchases with GHL transactions (ground truth) for clients whose
+  // GHL transactions are synced. Pixel-only clients keep their Meta count.
+  for (const [client_id, m] of metaByClient.entries()) {
+    if (clientsWithGhlTxnCoverage.has(client_id)) {
+      m.purchases = ghlPurchasesByClient.get(client_id) ?? 0;
+    }
   }
 
   // GHL leads per location
@@ -195,10 +271,17 @@ export async function getPortfolio(
     leadsByClient.set(r.location_id, (leadsByClient.get(r.location_id) ?? 0) + 1);
   }
 
-  // Bookings per location
+  // Bookings per location: prefer the unique-contact union of (deposit-payers ∪ won opps)
+  // when the client has GHL transaction coverage. For pixel-only clients, fall back to
+  // the won-opps count (existing behaviour) so we don't regress those rows.
   const bookingsByClient = new Map<string, number>();
   for (const r of bookingsData) {
     bookingsByClient.set(r.location_id, (bookingsByClient.get(r.location_id) ?? 0) + 1);
+  }
+  for (const [client_id, contacts] of bookingContactsByClient.entries()) {
+    if (clientsWithGhlTxnCoverage.has(client_id)) {
+      bookingsByClient.set(client_id, contacts.size);
+    }
   }
 
   // Build rows from union of all client_ids that appeared in spend
@@ -410,6 +493,226 @@ export const ROLLOUT_COMPLETE_CLIENT_IDS = [
   'gxKykshbOOV8B0ZiXNJH', // Maldon Skin Clinic
   'uoVWSipG848b4HyWePeW', // Skin and Heal
 ];
+
+// ─── Funnel breakdown (Funnel → Step → Variation, with deposit data) ─────────
+
+export type FunnelPage = {
+  page_id: string;
+  page_name: string;
+  page_url: string | null;
+  deposits: number;
+  amount_gbp: number;
+};
+
+export type FunnelStep = {
+  step_id: string;
+  step_name: string;
+  step_sequence: number | null;
+  has_variations: boolean;
+  pages: FunnelPage[];
+  step_deposits: number;       // includes unattributed (page_id=null) transactions
+  step_amount_gbp: number;
+};
+
+export type FunnelBreakdown = {
+  funnel_id: string;
+  funnel_name: string;
+  total_deposits: number;
+  total_amount_gbp: number;
+  steps: FunnelStep[];
+  is_synthetic?: boolean;  // true for the catch-all "Non-funnel payments" entry
+};
+
+export async function getFunnelBreakdown(
+  clientId: string,
+  range: DateRange,
+): Promise<FunnelBreakdown[]> {
+  type FunnelRow = { source_id: string; name: string | null };
+  type PageRow = {
+    source_id: string;
+    funnel_source_id: string;
+    step_id: string;
+    step_name: string | null;
+    step_sequence: number | null;
+    step_split: boolean | null;
+    step_url: string | null;
+    name: string | null;
+  };
+  type TxnRow = {
+    entity_source_id: string | null;
+    entity_source_name: string | null;
+    step_id: string | null;
+    page_id: string | null;
+    amount_cents: number | null;
+  };
+
+  const [funnels, pages, txns] = await Promise.all([
+    fetchAll<FunnelRow>(() =>
+      supabase
+        .from('ghl_funnels')
+        .select('source_id, name')
+        .eq('location_id', clientId),
+    ),
+    fetchAll<PageRow>(() =>
+      supabase
+        .from('ghl_funnel_pages')
+        .select('source_id, funnel_source_id, step_id, step_name, step_sequence, step_split, step_url, name')
+        .eq('location_id', clientId),
+    ),
+    fetchAll<TxnRow>(() =>
+      supabase
+        .from('ghl_transactions')
+        .select('entity_source_id, entity_source_name, step_id, page_id, amount_cents')
+        .eq('location_id', clientId)
+        .eq('status', 'succeeded')
+        .gte('charge_created_at', `${range.since}T00:00:00Z`)
+        .lte('charge_created_at', `${range.until}T23:59:59Z`),
+    ),
+  ]);
+
+  if (funnels.length === 0) return [];
+
+  // Aggregate transactions
+  type Counter = { deposits: number; amount_cents: number };
+  const byPage = new Map<string, Counter>();
+  const byStep = new Map<string, Counter>(); // key: `${funnelId}::${stepId}`
+  const byFunnel = new Map<string, Counter>();
+  const inc = (m: Map<string, Counter>, k: string, cents: number | null) => {
+    const cur = m.get(k) ?? { deposits: 0, amount_cents: 0 };
+    cur.deposits += 1;
+    cur.amount_cents += cents ?? 0;
+    m.set(k, cur);
+  };
+  for (const t of txns) {
+    if (t.page_id) inc(byPage, t.page_id, t.amount_cents);
+    if (t.entity_source_id && t.step_id) inc(byStep, `${t.entity_source_id}::${t.step_id}`, t.amount_cents);
+    if (t.entity_source_id) inc(byFunnel, t.entity_source_id, t.amount_cents);
+  }
+
+  // Group pages by funnel → step
+  const stepsByFunnel = new Map<string, Map<string, PageRow[]>>();
+  for (const p of pages) {
+    const fmap = stepsByFunnel.get(p.funnel_source_id) ?? new Map<string, PageRow[]>();
+    const list = fmap.get(p.step_id) ?? [];
+    list.push(p);
+    fmap.set(p.step_id, list);
+    stepsByFunnel.set(p.funnel_source_id, fmap);
+  }
+
+  const out: FunnelBreakdown[] = [];
+  for (const f of funnels) {
+    const stepMap = stepsByFunnel.get(f.source_id) ?? new Map<string, PageRow[]>();
+    const steps: FunnelStep[] = [];
+    for (const [stepId, stepPages] of stepMap.entries()) {
+      const first = stepPages[0];
+      const stepCounter = byStep.get(`${f.source_id}::${stepId}`) ?? { deposits: 0, amount_cents: 0 };
+      steps.push({
+        step_id: stepId,
+        step_name: first.step_name ?? '(unnamed step)',
+        step_sequence: first.step_sequence ?? null,
+        has_variations: stepPages.length > 1 || !!first.step_split,
+        pages: stepPages.map(p => {
+          const pc = byPage.get(p.source_id) ?? { deposits: 0, amount_cents: 0 };
+          return {
+            page_id: p.source_id,
+            page_name: p.name ?? '(unnamed page)',
+            page_url: p.step_url ?? null,
+            deposits: pc.deposits,
+            amount_gbp: pc.amount_cents / 100,
+          };
+        }),
+        step_deposits: stepCounter.deposits,
+        step_amount_gbp: stepCounter.amount_cents / 100,
+      });
+    }
+    steps.sort((a, b) => (a.step_sequence ?? 999) - (b.step_sequence ?? 999));
+    const fc = byFunnel.get(f.source_id) ?? { deposits: 0, amount_cents: 0 };
+    out.push({
+      funnel_id: f.source_id,
+      funnel_name: f.name ?? '(unnamed funnel)',
+      total_deposits: fc.deposits,
+      total_amount_gbp: fc.amount_cents / 100,
+      steps,
+    });
+  }
+  // Funnels with any activity first; then anything that has structure but no deposits
+  // Bucket transactions whose entity_source_id doesn't match any known funnel
+  // (one-step order forms, direct payment links, etc.) so totals reconcile.
+  const knownFunnelIds = new Set(funnels.map(f => f.source_id));
+  const orphanByEntity = new Map<string, { name: string; deposits: number; amount_cents: number }>();
+  for (const t of txns) {
+    if (t.entity_source_id && knownFunnelIds.has(t.entity_source_id)) continue;
+    const key = t.entity_source_id ?? '__null__';
+    const cur = orphanByEntity.get(key) ?? {
+      name: t.entity_source_name ?? 'Direct / one-off payment',
+      deposits: 0, amount_cents: 0,
+    };
+    cur.deposits += 1;
+    cur.amount_cents += t.amount_cents ?? 0;
+    orphanByEntity.set(key, cur);
+  }
+  if (orphanByEntity.size > 0) {
+    const orphanSteps: FunnelStep[] = [];
+    let totalDeposits = 0;
+    let totalAmountCents = 0;
+    for (const [, info] of orphanByEntity.entries()) {
+      orphanSteps.push({
+        step_id: '__orphan__',
+        step_name: info.name,
+        step_sequence: null,
+        has_variations: false,
+        pages: [],
+        step_deposits: info.deposits,
+        step_amount_gbp: info.amount_cents / 100,
+      });
+      totalDeposits += info.deposits;
+      totalAmountCents += info.amount_cents;
+    }
+    out.push({
+      funnel_id: '__non_funnel__',
+      funnel_name: 'Non-funnel payments',
+      total_deposits: totalDeposits,
+      total_amount_gbp: totalAmountCents / 100,
+      steps: orphanSteps,
+      is_synthetic: true,
+    });
+  }
+
+  out.sort((a, b) => b.total_deposits - a.total_deposits || a.funnel_name.localeCompare(b.funnel_name));
+  return out;
+}
+
+export type FunnelListItem = {
+  client_id: string;
+  client_name: string;
+  funnel_id: string;
+  funnel_name: string;
+};
+
+export async function getFunnelList(): Promise<FunnelListItem[]> {
+  type Row = { source_id: string; location_id: string; name: string | null };
+  const funnels = await fetchAll<Row>(() =>
+    supabase.from('ghl_funnels').select('source_id, location_id, name'),
+  );
+  if (funnels.length === 0) return [];
+  const clientIds = Array.from(new Set(funnels.map(f => f.location_id)));
+  const { data: accounts } = await supabase
+    .from('meta_accounts')
+    .select('client_id, client_name')
+    .in('client_id', clientIds);
+  const nameById = new Map<string, string>();
+  for (const a of accounts ?? []) nameById.set(a.client_id, a.client_name ?? a.client_id);
+  return funnels
+    .map(f => ({
+      client_id: f.location_id,
+      client_name: nameById.get(f.location_id) ?? f.location_id,
+      funnel_id: f.source_id,
+      funnel_name: f.name ?? '(unnamed funnel)',
+    }))
+    .sort((a, b) =>
+      a.client_name.localeCompare(b.client_name) || a.funnel_name.localeCompare(b.funnel_name),
+    );
+}
 
 export type ClientOption = { client_id: string; client_name: string };
 
