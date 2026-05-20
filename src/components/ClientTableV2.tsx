@@ -6,7 +6,7 @@ import type { ClientRow } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn, formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 
-type SortKey = 'spend_gbp' | 'leads' | 'cpl_gbp' | 'purchases' | 'bookings' | 'conv_rate_pct' | 'cac_gbp';
+type SortKey = 'spend_gbp' | 'leads' | 'cpl_gbp' | 'purchases' | 'bookings' | 'revenue_gbp' | 'roas' | 'conv_rate_pct' | 'cac_gbp';
 
 const HEADERS: Array<{ key: SortKey | 'name'; label: string; sortable: boolean; align: 'left' | 'right' }> = [
   { key: 'name', label: 'Client', sortable: false, align: 'left' },
@@ -15,6 +15,8 @@ const HEADERS: Array<{ key: SortKey | 'name'; label: string; sortable: boolean; 
   { key: 'cpl_gbp', label: 'CPL', sortable: true, align: 'right' },
   { key: 'purchases', label: 'Deposits', sortable: true, align: 'right' },
   { key: 'bookings', label: 'Bookings', sortable: true, align: 'right' },
+  { key: 'revenue_gbp', label: 'Revenue', sortable: true, align: 'right' },
+  { key: 'roas', label: 'ROAS', sortable: true, align: 'right' },
   { key: 'conv_rate_pct', label: 'Conv Rate', sortable: true, align: 'right' },
   { key: 'cac_gbp', label: 'CAC', sortable: true, align: 'right' },
 ];
@@ -29,6 +31,12 @@ function colorForCac(v: number | null) {
   if (v == null) return 'text-fg-dim';
   if (v <= 150) return 'text-green';
   if (v <= 250) return 'text-yellow';
+  return 'text-red';
+}
+function colorForRoas(v: number | null) {
+  if (v == null) return 'text-fg-dim';
+  if (v >= 5) return 'text-green';
+  if (v >= 2) return 'text-yellow';
   return 'text-red';
 }
 
@@ -111,6 +119,12 @@ export function ClientTableV2({ rows, days }: { rows: ClientRow[]; days: number 
                   </td>
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-pink">{r.purchases > 0 ? formatNumber(r.purchases) : '—'}</td>
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-fg">{formatNumber(r.bookings)}</td>
+                  <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-fg">
+                    {r.revenue_gbp != null ? formatGBP(r.revenue_gbp, { decimals: 0 }) : '—'}
+                  </td>
+                  <td className={cn('px-5 py-3.5 text-right font-mono text-sm font-semibold tabular-nums', colorForRoas(r.roas))}>
+                    {r.roas != null ? `${r.roas.toFixed(2)}x` : '—'}
+                  </td>
                   <td className={cn('px-5 py-3.5 text-right font-mono text-sm tabular-nums', colorForConv(r.conv_rate_pct))}>
                     {formatPercent(r.conv_rate_pct)}
                   </td>

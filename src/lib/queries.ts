@@ -32,6 +32,9 @@ export type ClientRow = {
   cpl_gbp: number | null;
   conv_rate_pct: number | null;
   cac_gbp: number | null;
+  // Revenue from the client's Profit Tracker (null = no tracker connected yet):
+  revenue_gbp: number | null;
+  roas: number | null;
   // LP funnel rates (use LP leads, not all leads):
   lead_optin_rate_pct: number | null;
   deposit_start_rate_pct: number | null;
@@ -50,6 +53,8 @@ export type Totals = {
   cpl_gbp: number | null;
   conv_rate_pct: number | null;
   cac_gbp: number | null;
+  revenue_gbp: number | null;
+  roas: number | null;
   lead_optin_rate_pct: number | null;
   deposit_start_rate_pct: number | null;
   deposit_collection_rate_pct: number | null;
@@ -164,6 +169,16 @@ export async function getPortfolio(
     if (clientFilter) q = q.eq('location_id', clientFilter);
     return q;
   };
+  // Revenue from Profit Tracker entries, attributed by effective_date.
+  const buildRevenueQ = () => {
+    let q = supabase
+      .from('profit_tracker_entries')
+      .select('location_id, total_revenue_gbp')
+      .gte('effective_date', range.since)
+      .lte('effective_date', range.until);
+    if (clientFilter) q = q.eq('location_id', clientFilter);
+    return q;
+  };
   // Locations that have GHL transactions synced at all (any date) — used to know
   // whether to trust a 0 count from GHL, or fall back to Meta pixel for that client.
   const buildTxnsCoverageQ = () => {
@@ -199,16 +214,25 @@ export async function getPortfolio(
   };
   type TxnCoverageRow = { location_id: string };
   type FunnelRow = { location_id: string; source_id: string };
-  const [spendData, leadsData, bookingsData, txnsData, txnsCoverage, funnelsData, freshnessMeta, freshnessGhl] = await Promise.all([
+  type RevenueRow = { location_id: string; total_revenue_gbp: number | null };
+  const [spendData, leadsData, bookingsData, txnsData, txnsCoverage, funnelsData, revenueData, freshnessMeta, freshnessGhl] = await Promise.all([
     fetchAll<MetaRow>(buildMetaQ),
     fetchAll<ContactRow>(buildContactsQ),
     fetchAll<OppRow>(buildOppsQ),
     fetchAll<TxnRow>(buildTxnsQ),
     fetchAll<TxnCoverageRow>(buildTxnsCoverageQ),
     fetchAll<FunnelRow>(buildFunnelsQ),
+    fetchAll<RevenueRow>(buildRevenueQ),
     metaFreshQ,
     ghlFreshQ,
   ]);
+
+  // Revenue per client (only clients with a connected Profit Tracker appear).
+  const revenueByClient = new Map<string, number>();
+  for (const r of revenueData) {
+    if (r.total_revenue_gbp == null) continue;
+    revenueByClient.set(r.location_id, (revenueByClient.get(r.location_id) ?? 0) + Number(r.total_revenue_gbp));
+  }
 
   // Funnel IDs per client — used to count "purchases" as funnel-attributed only.
   const funnelIdsByClient = new Map<string, Set<string>>();
@@ -304,6 +328,7 @@ export async function getPortfolio(
     const spend_gbp = m.spend_cents / 100;
     const leads = leadsByClient.get(client_id) ?? 0;
     const bookings = bookingsByClient.get(client_id) ?? 0;
+    const revenue_gbp = revenueByClient.has(client_id) ? revenueByClient.get(client_id)! : null;
     rows.push({
       client_id,
       client_name: m.client_name,
@@ -318,6 +343,8 @@ export async function getPortfolio(
       cpl_gbp: leads > 0 ? +(spend_gbp / leads).toFixed(2) : null,
       conv_rate_pct: leads > 0 ? +((100 * bookings) / leads).toFixed(2) : null,
       cac_gbp: bookings > 0 ? +(spend_gbp / bookings).toFixed(2) : null,
+      revenue_gbp,
+      roas: revenue_gbp != null && spend_gbp > 0 ? +(revenue_gbp / spend_gbp).toFixed(2) : null,
       lead_optin_rate_pct: m.lp_views > 0 ? +((100 * m.lp_leads) / m.lp_views).toFixed(2) : null,
       deposit_start_rate_pct: m.lp_leads > 0 ? +((100 * m.checkouts) / m.lp_leads).toFixed(2) : null,
       deposit_collection_rate_pct: m.checkouts > 0 ? +((100 * m.purchases) / m.checkouts).toFixed(2) : null,
@@ -334,6 +361,11 @@ export async function getPortfolio(
   const totalCheckouts = rows.reduce((s, r) => s + r.checkouts, 0);
   const totalPurchases = rows.reduce((s, r) => s + r.purchases, 0);
   const totalBookings = rows.reduce((s, r) => s + r.bookings, 0);
+  // Revenue total: null unless at least one client has Profit Tracker data in range.
+  const revenueRows = rows.filter(r => r.revenue_gbp != null);
+  const totalRevenue = revenueRows.length > 0
+    ? revenueRows.reduce((s, r) => s + (r.revenue_gbp ?? 0), 0)
+    : null;
   const totals: Totals = {
     spend_gbp: totalSpend,
     lp_views: totalLpViews,
@@ -346,6 +378,8 @@ export async function getPortfolio(
     cpl_gbp: totalLeads > 0 ? +(totalSpend / totalLeads).toFixed(2) : null,
     conv_rate_pct: totalLeads > 0 ? +((100 * totalBookings) / totalLeads).toFixed(2) : null,
     cac_gbp: totalBookings > 0 ? +(totalSpend / totalBookings).toFixed(2) : null,
+    revenue_gbp: totalRevenue,
+    roas: totalRevenue != null && totalSpend > 0 ? +(totalRevenue / totalSpend).toFixed(2) : null,
     lead_optin_rate_pct: totalLpViews > 0 ? +((100 * totalLpLeads) / totalLpViews).toFixed(2) : null,
     deposit_start_rate_pct: totalLpLeads > 0 ? +((100 * totalCheckouts) / totalLpLeads).toFixed(2) : null,
     deposit_collection_rate_pct: totalCheckouts > 0 ? +((100 * totalPurchases) / totalCheckouts).toFixed(2) : null,

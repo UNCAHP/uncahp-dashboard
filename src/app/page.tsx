@@ -135,8 +135,20 @@ function HeroKpis({ totals }: { totals: Totals }) {
         hero
       />
       <KpiCardV2 label="Deposits" value={formatNumber(totals.purchases)} icon={CreditCard} hero hint="Funnel-attributed deposits paid via GHL" />
-      <KpiCardV2 label="Revenue" value="—" icon={DollarSign} hero hint="Treatment revenue requires clinic POS integration" />
-      <KpiCardV2 label="ROAS" value="—" icon={Sparkles} hero hint="Needs Revenue / Spend (awaiting POS data)" />
+      <KpiCardV2
+        label="Revenue"
+        value={totals.revenue_gbp != null ? formatGBP(totals.revenue_gbp, { decimals: 0 }) : '—'}
+        icon={DollarSign}
+        hero
+        hint="Treatment revenue from the client's Profit Tracker"
+      />
+      <KpiCardV2
+        label="ROAS"
+        value={totals.roas != null ? `${totals.roas.toFixed(2)}x` : '—'}
+        icon={Sparkles}
+        hero
+        hint="Revenue ÷ ad spend"
+      />
     </div>
   );
 }
@@ -166,7 +178,7 @@ function buildFunnelStrip(totals: Totals): FunnelStripData {
     deposits: totals.purchases,
     showed: null,
     treatment: null,
-    revenue: null,
+    revenue: totals.revenue_gbp,
   };
 }
 
