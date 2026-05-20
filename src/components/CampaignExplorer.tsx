@@ -364,14 +364,11 @@ function AdRow({ ad, cols }: { ad: AdNode; cols: MetricKey[] }) {
             <ImageOff size={14} className="text-fg-dim" />
           </div>
         )}
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-fg-dim">
-              Ad
-            </span>
-            <span className="truncate text-xs text-fg">{ad.name}</span>
-          </div>
-          {ad.headline && <div className="mt-0.5 truncate text-[10px] text-fg-dim">{ad.headline}</div>}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-fg-dim">
+            Ad
+          </span>
+          <span className="truncate text-xs text-fg">{ad.name}</span>
         </div>
       </div>
       <div className="flex w-[150px] shrink-0 justify-center">
