@@ -6,7 +6,6 @@ import type { CampaignNode, AdNode, CampaignMetrics } from '@/lib/queries';
 import { cn, formatGBP, formatNumber } from '@/lib/utils';
 
 type StatusFilter = 'all' | 'active';
-type Tone = 'campaign' | 'adset' | 'ad';
 type MetricKey =
   | 'spend' | 'impressions' | 'clicks' | 'ctr' | 'cpc' | 'cpm'
   | 'leads' | 'cpl' | 'lp_bookings' | 'cost_lp_booking' | 'bookings' | 'conv' | 'cac' | 'roi';
@@ -29,7 +28,7 @@ const METRICS: { key: MetricKey; label: string; short?: string; get: (m: Campaig
 ];
 
 const BUILT_IN_PRESETS: { name: string; cols: MetricKey[] }[] = [
-  { name: 'Default', cols: ['spend', 'clicks', 'ctr', 'leads', 'cpl', 'lp_bookings', 'bookings', 'conv', 'cac', 'roi'] },
+  { name: 'Default', cols: ['spend', 'clicks', 'ctr', 'leads', 'cpl', 'lp_bookings', 'cost_lp_booking', 'bookings', 'conv', 'cac', 'roi'] },
   { name: 'Performance', cols: ['spend', 'impressions', 'clicks', 'ctr', 'cpc', 'cpm'] },
   { name: 'Conversions', cols: ['spend', 'leads', 'cpl', 'lp_bookings', 'cost_lp_booking', 'bookings', 'conv', 'cac', 'roi'] },
   { name: 'Funnel', cols: ['impressions', 'clicks', 'ctr', 'leads', 'cpl', 'lp_bookings', 'bookings', 'conv'] },
@@ -79,16 +78,18 @@ function StatusToggle({ value, onChange }: { value: StatusFilter; onChange: (v: 
   );
 }
 
-function MetricCells({ m, tone, cols }: { m: CampaignMetrics; tone: Tone; cols: MetricKey[] }) {
-  const base =
-    tone === 'campaign' ? 'text-fg font-semibold' : tone === 'adset' ? 'text-fg-muted' : 'text-fg-dim';
-  const pinkTone = tone === 'campaign' ? 'text-pink font-semibold' : tone === 'adset' ? 'text-pink/80' : 'text-pink/60';
+function MetricCells({ m, cols }: { m: CampaignMetrics; cols: MetricKey[] }) {
+  // Level differentiation is done by row opacity (see brightness logic below),
+  // so cells use one uniform colour.
   return (
     <>
       {METRICS.filter(d => cols.includes(d.key)).map(d => (
         <div
           key={d.key}
-          className={cn('w-[76px] shrink-0 text-right font-mono text-xs tabular-nums', d.pink ? pinkTone : base)}
+          className={cn(
+            'w-[76px] shrink-0 text-center font-mono text-xs font-medium tabular-nums',
+            d.pink ? 'text-pink' : 'text-fg',
+          )}
         >
           {d.get(m)}
         </div>
@@ -261,7 +262,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
           <StatusToggle value={filter} onChange={setFilter} />
         </div>
         {shownMetrics.map(d => (
-          <div key={d.key} className="w-[76px] shrink-0 text-right text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
+          <div key={d.key} className="w-[76px] shrink-0 text-center text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
             {d.short ?? d.label}
           </div>
         ))}
@@ -274,6 +275,9 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
           visibleCampaigns.map(campaign => {
             const cOpen = openCampaigns.has(campaign.id);
             const adsets = campaign.adsets.filter(s => passesFilter(s.status, filter));
+            // Brightness: the deepest open level is full; parents dim as you drill in.
+            const hasOpenAdset = adsets.some(s => openAdsets.has(s.id));
+            const campaignOpacity = !cOpen ? '' : hasOpenAdset ? 'opacity-50' : 'opacity-75';
             return (
               <div key={campaign.id} className="border-b border-border last:border-0">
                 <button
@@ -282,6 +286,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
                   className={cn(
                     'flex w-full items-center gap-3 px-5 py-3.5 text-left transition-colors',
                     cOpen ? 'bg-surface-2' : 'bg-surface-2/60 hover:bg-surface-2',
+                    campaignOpacity,
                   )}
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -297,7 +302,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
                   <div className="flex w-[150px] shrink-0 justify-center">
                     <StatusPill status={campaign.status} />
                   </div>
-                  <MetricCells m={campaign} tone="campaign" cols={cols} />
+                  <MetricCells m={campaign} cols={cols} />
                 </button>
 
                 {cOpen && adsets.length === 0 && (
@@ -313,7 +318,10 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
                         <button
                           type="button"
                           onClick={() => toggle(openAdsets, adset.id, setOpenAdsets)}
-                          className="flex w-full items-center gap-3 border-l-2 border-border-strong px-5 py-2.5 pl-8 text-left transition-colors hover:bg-surface"
+                          className={cn(
+                            'flex w-full items-center gap-3 border-l-2 border-border-strong px-5 py-2.5 pl-8 text-left transition-colors hover:bg-surface',
+                            sOpen && 'opacity-75',
+                          )}
                         >
                           <div className="flex min-w-0 flex-1 items-center gap-2">
                             <ChevronRight
@@ -328,7 +336,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
                           <div className="flex w-[150px] shrink-0 justify-center">
                             <StatusPill status={adset.status} />
                           </div>
-                          <MetricCells m={adset} tone="adset" cols={cols} />
+                          <MetricCells m={adset} cols={cols} />
                         </button>
 
                         {sOpen && ads.length === 0 && (
@@ -377,7 +385,7 @@ function AdRow({ ad, cols }: { ad: AdNode; cols: MetricKey[] }) {
       <div className="flex w-[150px] shrink-0 justify-center">
         <StatusPill status={ad.status} />
       </div>
-      <MetricCells m={ad} tone="ad" cols={cols} />
+      <MetricCells m={ad} cols={cols} />
     </div>
   );
 }
