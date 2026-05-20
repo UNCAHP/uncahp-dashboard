@@ -77,6 +77,20 @@ async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
   return out;
 }
 
+// GHL contact custom fields arrive as {id, value} with no field name, and most
+// location tokens lack the scope to read field definitions. So we identify the
+// ad-attribution field by VALUE: a Meta ad ID is an 18-digit number unique to
+// meta_ads. Any custom field whose value matches a known ad id IS the utm_content.
+function matchAdId(metadata: unknown, adIds: Set<string>): string | null {
+  const cf = (metadata as { customFields?: Array<{ value?: unknown }> } | null)?.customFields;
+  if (!Array.isArray(cf)) return null;
+  for (const f of cf) {
+    const v = f?.value;
+    if (typeof v === 'string' && adIds.has(v)) return v;
+  }
+  return null;
+}
+
 function extractAction(actions: unknown, type: string): number {
   if (!actions) return 0;
   let arr: MetaAction[] | null = null;
@@ -420,23 +434,21 @@ export async function getAdAttribution(
   }
 
   // GHL contacts attributed to this ad — match on customFields utm_content (paginated)
-  type ContactRow = { id: string; location_id: string; metadata: unknown };
+  type ContactRow = { source_id: string; location_id: string; metadata: unknown };
   const contacts = await fetchAll<ContactRow>(() =>
     supabase
       .from('ghl_contacts')
-      .select('id, location_id, metadata')
+      .select('source_id, location_id, metadata')
       .in('location_id', clientIds)
       .gte('date_added', `${range.since}T00:00:00Z`)
       .lte('date_added', `${range.until}T23:59:59Z`),
   );
 
+  const adIdSet = new Set(adById.keys());
   const leadsByAdId = new Map<string, number>();
   for (const c of contacts) {
-    const cf = (c.metadata as { customFields?: Array<{ key?: string; value?: string }> } | null)?.customFields ?? [];
-    const utmContent = Array.isArray(cf) ? cf.find(f => f?.key === 'utm_content')?.value : null;
-    if (utmContent && adById.has(utmContent)) {
-      leadsByAdId.set(utmContent, (leadsByAdId.get(utmContent) ?? 0) + 1);
-    }
+    const adId = matchAdId(c.metadata, adIdSet);
+    if (adId) leadsByAdId.set(adId, (leadsByAdId.get(adId) ?? 0) + 1);
   }
 
   // Bookings per ad — same UTM trace via ghl_opportunities → contact_id (paginated)
@@ -457,11 +469,10 @@ export async function getAdAttribution(
 
   const bookingsByAdId = new Map<string, number>();
   for (const c of contacts) {
-    const cf = (c.metadata as { customFields?: Array<{ key?: string; value?: string }> } | null)?.customFields ?? [];
-    const utmContent = Array.isArray(cf) ? cf.find(f => f?.key === 'utm_content')?.value : null;
-    if (!utmContent || !adById.has(utmContent)) continue;
-    if (wonContactIds.has(c.id)) {
-      bookingsByAdId.set(utmContent, (bookingsByAdId.get(utmContent) ?? 0) + 1);
+    const adId = matchAdId(c.metadata, adIdSet);
+    if (!adId) continue;
+    if (wonContactIds.has(c.source_id)) {
+      bookingsByAdId.set(adId, (bookingsByAdId.get(adId) ?? 0) + 1);
     }
   }
 

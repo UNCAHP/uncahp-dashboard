@@ -13,7 +13,7 @@ import { PlaceholderView } from '@/components/PlaceholderView';
 import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
 import {
   defaultRange, getPortfolio, getAdAttribution, getClientList, getFunnelBreakdown, getFunnelList,
-  ROLLOUT_COMPLETE_CLIENT_IDS, type ClientRow, type Totals,
+  type ClientRow, type Totals,
 } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
@@ -42,9 +42,9 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   const scopedClient = view === 'client' ? clientFilter : undefined;
   const funnelClientId = view === 'funnel' ? clientFilter : undefined;
 
-  const adClientIds = scopedClient
-    ? (ROLLOUT_COMPLETE_CLIENT_IDS.includes(scopedClient) ? [scopedClient] : [])
-    : ROLLOUT_COMPLETE_CLIENT_IDS;
+  // Ad attribution works for any client now (UTM matched by Meta ad ID value,
+  // no per-client UTM-scheme rollout dependency).
+  const adClientIds = scopedClient ? [scopedClient] : [];
 
   const [{ rows, totals, freshness }, adRows, clients, funnelBreakdown, funnelList, funnelAnalyticsBreakdown] = await Promise.all([
     getPortfolio(range, scopedClient),

@@ -11,7 +11,8 @@ export function AdTable({ rows }: Props) {
       <div className="border-b border-border px-6 py-4">
         <h2 className="text-base font-medium text-fg">Per-Ad Attribution</h2>
         <p className="mt-1 text-xs text-fg-muted">
-          UTM-rollout-complete clients only (Maldon, Skin Heal). Other clients lack per-ad UTM tracking — see <span className="font-mono">reference/utm-rollout-sop.md</span>.
+          Leads traced to the Meta ad via UTM (matched by ad ID). Coverage grows as each client&apos;s
+          landing pages move onto the UTM-tagged funnels — ads with no traced leads fall back to Meta&apos;s pixel count.
         </p>
       </div>
       <div className="overflow-x-auto">
