@@ -14,7 +14,7 @@ const HEADERS: Array<{ key: SortKey | 'name'; label: string; sortable: boolean; 
   { key: 'leads', label: 'Leads', sortable: true, align: 'right' },
   { key: 'cpl_gbp', label: 'CPL', sortable: true, align: 'right' },
   { key: 'purchases', label: 'Deposits', sortable: true, align: 'right' },
-  { key: 'bookings', label: 'Bookings', sortable: true, align: 'right' },
+  { key: 'bookings', label: 'Total Bookings', sortable: true, align: 'right' },
   { key: 'revenue_gbp', label: 'Revenue', sortable: true, align: 'right' },
   { key: 'roas', label: 'ROAS', sortable: true, align: 'right' },
   { key: 'conv_rate_pct', label: 'Conv Rate', sortable: true, align: 'right' },

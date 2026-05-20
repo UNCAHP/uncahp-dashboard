@@ -757,7 +757,9 @@ export type CampaignMetrics = {
   cpm_gbp: number | null;
   leads: number;
   cpl_gbp: number | null;
-  bookings: number;
+  lp_bookings: number;          // Meta pixel purchases — deposit paid in the funnel
+  cost_lp_booking_gbp: number | null;
+  bookings: number;             // GHL 'booked' tag — all bookings
   conv_rate_pct: number | null;
   cac_gbp: number | null;
   roi: number | null; // null until revenue is attributed per ad
@@ -788,7 +790,7 @@ export type CampaignNode = CampaignMetrics & {
   adsets: AdsetNode[];
 };
 
-type RawMetrics = { spend_cents: number; clicks: number; impressions: number; leads: number; bookings: number };
+type RawMetrics = { spend_cents: number; clicks: number; impressions: number; leads: number; lp_bookings: number; bookings: number };
 
 function computeMetrics(r: RawMetrics): CampaignMetrics {
   const spend = r.spend_cents / 100;
@@ -801,6 +803,8 @@ function computeMetrics(r: RawMetrics): CampaignMetrics {
     cpm_gbp: r.impressions > 0 ? +((spend / r.impressions) * 1000).toFixed(2) : null,
     leads: r.leads,
     cpl_gbp: r.leads > 0 ? +(spend / r.leads).toFixed(2) : null,
+    lp_bookings: r.lp_bookings,
+    cost_lp_booking_gbp: r.lp_bookings > 0 ? +(spend / r.lp_bookings).toFixed(2) : null,
     bookings: r.bookings,
     conv_rate_pct: r.leads > 0 ? +((100 * r.bookings) / r.leads).toFixed(2) : null,
     cac_gbp: r.bookings > 0 ? +(spend / r.bookings).toFixed(2) : null,
@@ -815,9 +819,10 @@ function sumRaw(parts: RawMetrics[]): RawMetrics {
       clicks: a.clicks + p.clicks,
       impressions: a.impressions + p.impressions,
       leads: a.leads + p.leads,
+      lp_bookings: a.lp_bookings + p.lp_bookings,
       bookings: a.bookings + p.bookings,
     }),
-    { spend_cents: 0, clicks: 0, impressions: 0, leads: 0, bookings: 0 },
+    { spend_cents: 0, clicks: 0, impressions: 0, leads: 0, lp_bookings: 0, bookings: 0 },
   );
 }
 
@@ -825,7 +830,7 @@ export async function getCampaignExplorer(
   clientId: string,
   range: DateRange,
 ): Promise<CampaignNode[]> {
-  type StatRow = { ad_source_id: string | null; spend_cents: number | null; clicks: number | null; impressions: number | null; leads: number | null };
+  type StatRow = { ad_source_id: string | null; spend_cents: number | null; clicks: number | null; impressions: number | null; leads: number | null; purchases: number | null };
   type CampRow = { source_id: string; name: string | null; status: string | null; objective: string | null };
   type AdsetRow = { source_id: string; campaign_source_id: string | null; name: string | null; status: string | null };
   type AdRow = {
@@ -840,7 +845,7 @@ export async function getCampaignExplorer(
     fetchAll<StatRow>(() =>
       supabase
         .from('meta_daily_stats')
-        .select('ad_source_id, spend_cents, clicks, impressions, leads')
+        .select('ad_source_id, spend_cents, clicks, impressions, leads, purchases')
         .eq('client_id', clientId)
         .gte('date', range.since)
         .lte('date', range.until),
@@ -867,15 +872,16 @@ export async function getCampaignExplorer(
     ),
   ]);
 
-  // Per-ad spend/clicks/impressions/pixel-leads from Meta.
-  const statByAd = new Map<string, { spend_cents: number; clicks: number; impressions: number; pixelLeads: number }>();
+  // Per-ad spend/clicks/impressions/pixel-leads/pixel-purchases from Meta.
+  const statByAd = new Map<string, { spend_cents: number; clicks: number; impressions: number; pixelLeads: number; purchases: number }>();
   for (const s of stats) {
     if (!s.ad_source_id) continue;
-    const a = statByAd.get(s.ad_source_id) ?? { spend_cents: 0, clicks: 0, impressions: 0, pixelLeads: 0 };
+    const a = statByAd.get(s.ad_source_id) ?? { spend_cents: 0, clicks: 0, impressions: 0, pixelLeads: 0, purchases: 0 };
     a.spend_cents += s.spend_cents ?? 0;
     a.clicks += s.clicks ?? 0;
     a.impressions += s.impressions ?? 0;
     a.pixelLeads += s.leads ?? 0;
+    a.purchases += s.purchases ?? 0;
     statByAd.set(s.ad_source_id, a);
   }
 
@@ -898,7 +904,7 @@ export async function getCampaignExplorer(
   const adNodeById = new Map<string, AdNode>();
   const adsByAdset = new Map<string, string[]>();
   for (const a of ads) {
-    const st = statByAd.get(a.source_id) ?? { spend_cents: 0, clicks: 0, impressions: 0, pixelLeads: 0 };
+    const st = statByAd.get(a.source_id) ?? { spend_cents: 0, clicks: 0, impressions: 0, pixelLeads: 0, purchases: 0 };
     // Prefer UTM-traced GHL leads; fall back to Meta pixel leads.
     const leads = ghlLeadsByAd.get(a.source_id) ?? st.pixelLeads;
     const raw: RawMetrics = {
@@ -906,6 +912,7 @@ export async function getCampaignExplorer(
       clicks: st.clicks,
       impressions: st.impressions,
       leads,
+      lp_bookings: st.purchases,
       bookings: bookingsByAd.get(a.source_id) ?? 0,
     };
     adRaw.set(a.source_id, raw);

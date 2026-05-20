@@ -9,28 +9,30 @@ type StatusFilter = 'all' | 'active';
 type Tone = 'campaign' | 'adset' | 'ad';
 type MetricKey =
   | 'spend' | 'impressions' | 'clicks' | 'ctr' | 'cpc' | 'cpm'
-  | 'leads' | 'cpl' | 'bookings' | 'conv' | 'cac' | 'roi';
+  | 'leads' | 'cpl' | 'lp_bookings' | 'cost_lp_booking' | 'bookings' | 'conv' | 'cac' | 'roi';
 
-const METRICS: { key: MetricKey; label: string; get: (m: CampaignMetrics) => string; pink?: boolean }[] = [
+const METRICS: { key: MetricKey; label: string; short?: string; get: (m: CampaignMetrics) => string; pink?: boolean }[] = [
   { key: 'spend', label: 'Spend', get: m => formatGBP(m.spend_gbp, { decimals: 0 }) },
-  { key: 'impressions', label: 'Impr.', get: m => formatNumber(m.impressions) },
+  { key: 'impressions', label: 'Impressions', short: 'Impr.', get: m => formatNumber(m.impressions) },
   { key: 'clicks', label: 'Clicks', get: m => formatNumber(m.clicks) },
   { key: 'ctr', label: 'CTR', get: m => (m.ctr_pct != null ? `${m.ctr_pct}%` : '—') },
   { key: 'cpc', label: 'CPC', get: m => (m.cpc_gbp != null ? formatGBP(m.cpc_gbp, { decimals: 2 }) : '—') },
   { key: 'cpm', label: 'CPM', get: m => (m.cpm_gbp != null ? formatGBP(m.cpm_gbp, { decimals: 2 }) : '—') },
   { key: 'leads', label: 'Leads', get: m => formatNumber(m.leads) },
   { key: 'cpl', label: 'CPL', get: m => (m.cpl_gbp != null ? formatGBP(m.cpl_gbp, { decimals: 2 }) : '—') },
-  { key: 'bookings', label: 'Bookings', get: m => (m.bookings > 0 ? formatNumber(m.bookings) : '—'), pink: true },
+  { key: 'lp_bookings', label: 'LP Bookings', short: 'LP Bkgs', get: m => (m.lp_bookings > 0 ? formatNumber(m.lp_bookings) : '—'), pink: true },
+  { key: 'cost_lp_booking', label: 'Cost / LP Booking', short: 'Cost/LP', get: m => (m.cost_lp_booking_gbp != null ? formatGBP(m.cost_lp_booking_gbp, { decimals: 2 }) : '—') },
+  { key: 'bookings', label: 'Total Bookings', short: 'Total Bkgs', get: m => (m.bookings > 0 ? formatNumber(m.bookings) : '—'), pink: true },
   { key: 'conv', label: 'Conv', get: m => (m.conv_rate_pct != null ? `${m.conv_rate_pct}%` : '—') },
   { key: 'cac', label: 'CAC', get: m => (m.cac_gbp != null ? formatGBP(m.cac_gbp, { decimals: 2 }) : '—') },
   { key: 'roi', label: 'ROI', get: m => (m.roi != null ? `${m.roi.toFixed(2)}x` : '—') },
 ];
 
 const BUILT_IN_PRESETS: { name: string; cols: MetricKey[] }[] = [
-  { name: 'Default', cols: ['spend', 'clicks', 'ctr', 'leads', 'cpl', 'bookings', 'conv', 'cac', 'roi'] },
+  { name: 'Default', cols: ['spend', 'clicks', 'ctr', 'leads', 'cpl', 'lp_bookings', 'bookings', 'conv', 'cac', 'roi'] },
   { name: 'Performance', cols: ['spend', 'impressions', 'clicks', 'ctr', 'cpc', 'cpm'] },
-  { name: 'Conversions', cols: ['spend', 'leads', 'cpl', 'bookings', 'conv', 'cac', 'roi'] },
-  { name: 'Funnel', cols: ['impressions', 'clicks', 'ctr', 'leads', 'cpl', 'bookings', 'conv'] },
+  { name: 'Conversions', cols: ['spend', 'leads', 'cpl', 'lp_bookings', 'cost_lp_booking', 'bookings', 'conv', 'cac', 'roi'] },
+  { name: 'Funnel', cols: ['impressions', 'clicks', 'ctr', 'leads', 'cpl', 'lp_bookings', 'bookings', 'conv'] },
 ];
 
 const COLS_KEY = 'uncahp_campaign_cols';
@@ -260,7 +262,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
         </div>
         {shownMetrics.map(d => (
           <div key={d.key} className="w-[76px] shrink-0 text-right text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-            {d.label}
+            {d.short ?? d.label}
           </div>
         ))}
       </div>
