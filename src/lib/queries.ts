@@ -750,9 +750,11 @@ export async function getClientList(): Promise<ClientOption[]> {
 
 export type CampaignMetrics = {
   spend_gbp: number;
-  clicks: number;
   impressions: number;
+  clicks: number;
   ctr_pct: number | null;
+  cpc_gbp: number | null;
+  cpm_gbp: number | null;
   leads: number;
   cpl_gbp: number | null;
   bookings: number;
@@ -792,9 +794,11 @@ function computeMetrics(r: RawMetrics): CampaignMetrics {
   const spend = r.spend_cents / 100;
   return {
     spend_gbp: spend,
-    clicks: r.clicks,
     impressions: r.impressions,
+    clicks: r.clicks,
     ctr_pct: r.impressions > 0 ? +((100 * r.clicks) / r.impressions).toFixed(2) : null,
+    cpc_gbp: r.clicks > 0 ? +(spend / r.clicks).toFixed(2) : null,
+    cpm_gbp: r.impressions > 0 ? +((spend / r.impressions) * 1000).toFixed(2) : null,
     leads: r.leads,
     cpl_gbp: r.leads > 0 ? +(spend / r.leads).toFixed(2) : null,
     bookings: r.bookings,
