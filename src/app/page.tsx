@@ -1,5 +1,5 @@
 import {
-  PoundSterling, Users, TrendingDown, CreditCard, DollarSign, Sparkles,
+  PoundSterling, Users, TrendingDown, UserCheck, DollarSign, Sparkles,
   Percent, Eye, ShoppingCart,
 } from 'lucide-react';
 import { Sidebar } from '@/components/Sidebar';
@@ -151,7 +151,7 @@ function HeroKpis({ totals }: { totals: Totals }) {
         icon={TrendingDown}
         hero
       />
-      <KpiCardV2 label="Deposits" value={formatNumber(totals.purchases)} icon={CreditCard} hero hint="Funnel-attributed deposits paid via GHL" />
+      <KpiCardV2 label="Patients" value={formatNumber(totals.bookings)} icon={UserCheck} hero hint="Patients booked — contacts tagged 'booked' in GHL" />
       <KpiCardV2
         label="Revenue"
         value={totals.revenue_gbp != null ? formatGBP(totals.revenue_gbp, { decimals: 0 }) : '—'}
