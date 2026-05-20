@@ -8,7 +8,6 @@ import { KpiCardV2 } from '@/components/KpiCardV2';
 import { GaugeCard } from '@/components/GaugeCard';
 import { FunnelStrip, type FunnelStripData } from '@/components/FunnelStrip';
 import { ClientTableV2 } from '@/components/ClientTableV2';
-import { FunnelBreakdown } from '@/components/FunnelBreakdown';
 import { AdTable } from '@/components/AdTable';
 import { PlaceholderView } from '@/components/PlaceholderView';
 import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
@@ -67,13 +66,10 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   // no per-client UTM-scheme rollout dependency).
   const adClientIds = scopedClient ? [scopedClient] : [];
 
-  const [{ rows, totals, freshness }, adRows, clients, funnelBreakdown, funnelList, funnelAnalyticsBreakdown] = await Promise.all([
+  const [{ rows, totals, freshness }, adRows, clients, funnelList, funnelAnalyticsBreakdown] = await Promise.all([
     getPortfolio(range, scopedClient),
     view === 'client' ? getAdAttribution(range, adClientIds) : Promise.resolve([]),
     getClientList(),
-    view === 'client' && scopedClient
-      ? getFunnelBreakdown(scopedClient, range)
-      : Promise.resolve([]),
     view === 'funnel' ? getFunnelList() : Promise.resolve([]),
     view === 'funnel' && funnelClientId
       ? getFunnelBreakdown(funnelClientId, range)
@@ -117,10 +113,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
           activeClient ? (
             <ClientDetailView
               client={activeClient}
-              rows={rows}
               totals={totals}
               rangeDays={rangeDays}
-              funnelBreakdown={funnelBreakdown}
               adRows={adRows}
             />
           ) : (
@@ -243,22 +237,15 @@ function OverviewView({ rows, totals, rangeDays, since, until }: { rows: ClientR
 
 function ClientDetailView({
   client,
-  rows,
   totals,
   rangeDays,
-  funnelBreakdown,
   adRows,
 }: {
   client: { client_id: string; client_name: string };
-  rows: ClientRow[];
   totals: Totals;
   rangeDays: number;
-  funnelBreakdown: Awaited<ReturnType<typeof getFunnelBreakdown>>;
   adRows: Awaited<ReturnType<typeof getAdAttribution>>;
 }) {
-  // For client view, rows is already scoped to one client (or empty if no Meta data).
-  const _row = rows[0];
-  void _row;
   return (
     <div className="space-y-6 p-8">
       <div className="flex items-center gap-4">
@@ -275,8 +262,6 @@ function ClientDetailView({
       </div>
       <HeroKpis totals={totals} rangeDays={rangeDays} />
       <SecondaryKpis totals={totals} />
-      <FunnelStrip data={buildFunnelStrip(totals)} />
-      <FunnelBreakdown funnels={funnelBreakdown} />
       {adRows.length > 0 && <AdTable rows={adRows} />}
     </div>
   );
