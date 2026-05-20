@@ -275,19 +275,13 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
           visibleCampaigns.map(campaign => {
             const cOpen = openCampaigns.has(campaign.id);
             const adsets = campaign.adsets.filter(s => passesFilter(s.status, filter));
-            // Brightness: the deepest open level is full; parents dim as you drill in.
-            const hasOpenAdset = adsets.some(s => openAdsets.has(s.id));
-            const campaignOpacity = !cOpen ? '' : hasOpenAdset ? 'opacity-50' : 'opacity-75';
             return (
               <div key={campaign.id} className="border-b border-border last:border-0">
+                {/* Campaign level — lightest grey fill */}
                 <button
                   type="button"
                   onClick={() => toggle(openCampaigns, campaign.id, setOpenCampaigns)}
-                  className={cn(
-                    'flex w-full items-center gap-3 px-5 py-3.5 text-left transition-colors',
-                    cOpen ? 'bg-surface-2' : 'bg-surface-2/60 hover:bg-surface-2',
-                    campaignOpacity,
-                  )}
+                  className="flex w-full items-center gap-3 bg-surface-2 px-5 py-3.5 text-left transition-colors hover:bg-[#1f1f1f]"
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-2">
                     <ChevronRight
@@ -314,14 +308,12 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
                     const sOpen = openAdsets.has(adset.id);
                     const ads = adset.ads.filter(a => passesFilter(a.status, filter));
                     return (
-                      <div key={adset.id} className="border-t border-border/60 bg-bg">
+                      <div key={adset.id} className="border-t border-border/60 bg-[#0c0c0c]">
+                        {/* Ad set level — darker grey fill */}
                         <button
                           type="button"
                           onClick={() => toggle(openAdsets, adset.id, setOpenAdsets)}
-                          className={cn(
-                            'flex w-full items-center gap-3 border-l-2 border-border-strong px-5 py-2.5 pl-8 text-left transition-colors hover:bg-surface',
-                            sOpen && 'opacity-75',
-                          )}
+                          className="flex w-full items-center gap-3 border-l-2 border-border-strong px-5 py-2.5 pl-8 text-left transition-colors hover:bg-surface-2"
                         >
                           <div className="flex min-w-0 flex-1 items-center gap-2">
                             <ChevronRight
@@ -358,7 +350,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
 
 function AdRow({ ad, cols }: { ad: AdNode; cols: MetricKey[] }) {
   return (
-    <div className="flex items-center gap-3 border-t border-border/40 border-l-2 border-l-border px-5 py-2.5 pl-14">
+    <div className="flex items-center gap-3 border-t border-border/40 border-l-2 border-l-border bg-bg px-5 py-2.5 pl-14">
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
         {ad.image_url ? (
           // eslint-disable-next-line @next/next/no-img-element
