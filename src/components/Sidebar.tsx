@@ -95,7 +95,7 @@ export function Sidebar({
               prefetch={false}
               className={cn(
                 'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                active ? 'bg-pink text-black' : 'text-fg-muted hover:bg-surface hover:text-fg',
+                active ? 'bg-pink text-black' : 'text-fg hover:bg-surface hover:text-pink',
               )}
             >
               <Icon size={16} className="shrink-0" />
@@ -132,7 +132,7 @@ export function Sidebar({
                   prefetch={false}
                   className={cn(
                     'flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-xs transition-colors',
-                    active ? 'bg-surface text-fg' : 'text-fg-muted hover:bg-surface/60 hover:text-fg',
+                    active ? 'bg-surface text-fg' : 'text-fg hover:bg-surface/60 hover:text-pink',
                   )}
                 >
                   <div
