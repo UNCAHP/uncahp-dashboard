@@ -745,3 +745,220 @@ export async function getClientList(): Promise<ClientOption[]> {
   }
   return out;
 }
+
+// ─── Campaign Explorer (Campaign → Ad Set → Ad tree, with metrics) ───────────
+
+export type CampaignMetrics = {
+  spend_gbp: number;
+  clicks: number;
+  impressions: number;
+  ctr_pct: number | null;
+  leads: number;
+  cpl_gbp: number | null;
+  bookings: number;
+  conv_rate_pct: number | null;
+  cac_gbp: number | null;
+  roi: number | null; // null until revenue is attributed per ad
+};
+
+export type AdNode = CampaignMetrics & {
+  id: string;
+  name: string;
+  status: string;
+  creative_name: string | null;
+  image_url: string | null;
+  video_url: string | null;
+  headline: string | null;
+  primary_text: string | null;
+  cta: string | null;
+};
+export type AdsetNode = CampaignMetrics & {
+  id: string;
+  name: string;
+  status: string;
+  ads: AdNode[];
+};
+export type CampaignNode = CampaignMetrics & {
+  id: string;
+  name: string;
+  status: string;
+  objective: string | null;
+  adsets: AdsetNode[];
+};
+
+type RawMetrics = { spend_cents: number; clicks: number; impressions: number; leads: number; bookings: number };
+
+function computeMetrics(r: RawMetrics): CampaignMetrics {
+  const spend = r.spend_cents / 100;
+  return {
+    spend_gbp: spend,
+    clicks: r.clicks,
+    impressions: r.impressions,
+    ctr_pct: r.impressions > 0 ? +((100 * r.clicks) / r.impressions).toFixed(2) : null,
+    leads: r.leads,
+    cpl_gbp: r.leads > 0 ? +(spend / r.leads).toFixed(2) : null,
+    bookings: r.bookings,
+    conv_rate_pct: r.leads > 0 ? +((100 * r.bookings) / r.leads).toFixed(2) : null,
+    cac_gbp: r.bookings > 0 ? +(spend / r.bookings).toFixed(2) : null,
+    roi: null,
+  };
+}
+
+function sumRaw(parts: RawMetrics[]): RawMetrics {
+  return parts.reduce<RawMetrics>(
+    (a, p) => ({
+      spend_cents: a.spend_cents + p.spend_cents,
+      clicks: a.clicks + p.clicks,
+      impressions: a.impressions + p.impressions,
+      leads: a.leads + p.leads,
+      bookings: a.bookings + p.bookings,
+    }),
+    { spend_cents: 0, clicks: 0, impressions: 0, leads: 0, bookings: 0 },
+  );
+}
+
+export async function getCampaignExplorer(
+  clientId: string,
+  range: DateRange,
+): Promise<CampaignNode[]> {
+  type StatRow = { ad_source_id: string | null; spend_cents: number | null; clicks: number | null; impressions: number | null; leads: number | null };
+  type CampRow = { source_id: string; name: string | null; status: string | null; objective: string | null };
+  type AdsetRow = { source_id: string; campaign_source_id: string | null; name: string | null; status: string | null };
+  type AdRow = {
+    source_id: string; adset_source_id: string | null; campaign_source_id: string | null;
+    name: string | null; status: string | null; creative_name: string | null;
+    image_url: string | null; video_url: string | null; headline: string | null;
+    primary_text: string | null; call_to_action: string | null;
+  };
+  type ContactRow = { metadata: unknown; tags: unknown };
+
+  const [stats, campaigns, adsets, ads, contacts] = await Promise.all([
+    fetchAll<StatRow>(() =>
+      supabase
+        .from('meta_daily_stats')
+        .select('ad_source_id, spend_cents, clicks, impressions, leads')
+        .eq('client_id', clientId)
+        .gte('date', range.since)
+        .lte('date', range.until),
+    ),
+    fetchAll<CampRow>(() =>
+      supabase.from('meta_campaigns').select('source_id, name, status, objective').eq('client_id', clientId),
+    ),
+    fetchAll<AdsetRow>(() =>
+      supabase.from('meta_adsets').select('source_id, campaign_source_id, name, status').eq('client_id', clientId),
+    ),
+    fetchAll<AdRow>(() =>
+      supabase
+        .from('meta_ads')
+        .select('source_id, adset_source_id, campaign_source_id, name, status, creative_name, image_url, video_url, headline, primary_text, call_to_action')
+        .eq('client_id', clientId),
+    ),
+    fetchAll<ContactRow>(() =>
+      supabase
+        .from('ghl_contacts')
+        .select('metadata, tags')
+        .eq('location_id', clientId)
+        .gte('date_added', `${range.since}T00:00:00Z`)
+        .lte('date_added', `${range.until}T23:59:59Z`),
+    ),
+  ]);
+
+  // Per-ad spend/clicks/impressions/pixel-leads from Meta.
+  const statByAd = new Map<string, { spend_cents: number; clicks: number; impressions: number; pixelLeads: number }>();
+  for (const s of stats) {
+    if (!s.ad_source_id) continue;
+    const a = statByAd.get(s.ad_source_id) ?? { spend_cents: 0, clicks: 0, impressions: 0, pixelLeads: 0 };
+    a.spend_cents += s.spend_cents ?? 0;
+    a.clicks += s.clicks ?? 0;
+    a.impressions += s.impressions ?? 0;
+    a.pixelLeads += s.leads ?? 0;
+    statByAd.set(s.ad_source_id, a);
+  }
+
+  // GHL leads + bookings per ad, traced via the UTM ad-id custom field value.
+  const adIdSet = new Set(ads.map(a => a.source_id));
+  const ghlLeadsByAd = new Map<string, number>();
+  const bookingsByAd = new Map<string, number>();
+  for (const c of contacts) {
+    const adId = matchAdId(c.metadata, adIdSet);
+    if (!adId) continue;
+    ghlLeadsByAd.set(adId, (ghlLeadsByAd.get(adId) ?? 0) + 1);
+    const tags = Array.isArray(c.tags) ? (c.tags as unknown[]) : [];
+    if (tags.some(t => typeof t === 'string' && t.toLowerCase() === 'booked')) {
+      bookingsByAd.set(adId, (bookingsByAd.get(adId) ?? 0) + 1);
+    }
+  }
+
+  // Build ad nodes (+ keep their raw metrics for roll-up).
+  const adRaw = new Map<string, RawMetrics>();
+  const adNodeById = new Map<string, AdNode>();
+  const adsByAdset = new Map<string, string[]>();
+  for (const a of ads) {
+    const st = statByAd.get(a.source_id) ?? { spend_cents: 0, clicks: 0, impressions: 0, pixelLeads: 0 };
+    // Prefer UTM-traced GHL leads; fall back to Meta pixel leads.
+    const leads = ghlLeadsByAd.get(a.source_id) ?? st.pixelLeads;
+    const raw: RawMetrics = {
+      spend_cents: st.spend_cents,
+      clicks: st.clicks,
+      impressions: st.impressions,
+      leads,
+      bookings: bookingsByAd.get(a.source_id) ?? 0,
+    };
+    adRaw.set(a.source_id, raw);
+    adNodeById.set(a.source_id, {
+      id: a.source_id,
+      name: a.name ?? a.creative_name ?? '(unnamed ad)',
+      status: a.status ?? 'UNKNOWN',
+      creative_name: a.creative_name,
+      image_url: a.image_url,
+      video_url: a.video_url,
+      headline: a.headline,
+      primary_text: a.primary_text,
+      cta: a.call_to_action,
+      ...computeMetrics(raw),
+    });
+    const key = a.adset_source_id ?? '__no_adset__';
+    adsByAdset.set(key, [...(adsByAdset.get(key) ?? []), a.source_id]);
+  }
+
+  // Build adset nodes.
+  const adsetNodeById = new Map<string, AdsetNode>();
+  const adsetRawById = new Map<string, RawMetrics>();
+  const adsetsByCampaign = new Map<string, string[]>();
+  for (const s of adsets) {
+    const adIds = adsByAdset.get(s.source_id) ?? [];
+    const adNodes = adIds.map(id => adNodeById.get(id)!).filter(Boolean);
+    adNodes.sort((x, y) => y.spend_gbp - x.spend_gbp);
+    const raw = sumRaw(adIds.map(id => adRaw.get(id)!).filter(Boolean));
+    adsetRawById.set(s.source_id, raw);
+    adsetNodeById.set(s.source_id, {
+      id: s.source_id,
+      name: s.name ?? '(unnamed ad set)',
+      status: s.status ?? 'UNKNOWN',
+      ads: adNodes,
+      ...computeMetrics(raw),
+    });
+    const key = s.campaign_source_id ?? '__no_campaign__';
+    adsetsByCampaign.set(key, [...(adsetsByCampaign.get(key) ?? []), s.source_id]);
+  }
+
+  // Build campaign nodes. Include a campaign if it spent in range or is ACTIVE.
+  const out: CampaignNode[] = [];
+  for (const c of campaigns) {
+    const adsetIds = adsetsByCampaign.get(c.source_id) ?? [];
+    const adsetNodes = adsetIds.map(id => adsetNodeById.get(id)!).filter(Boolean);
+    adsetNodes.sort((x, y) => y.spend_gbp - x.spend_gbp);
+    const raw = sumRaw(adsetIds.map(id => adsetRawById.get(id)!).filter(Boolean));
+    if (raw.spend_cents === 0 && (c.status ?? '') !== 'ACTIVE') continue;
+    out.push({
+      id: c.source_id,
+      name: c.name ?? '(unnamed campaign)',
+      status: c.status ?? 'UNKNOWN',
+      objective: c.objective,
+      adsets: adsetNodes,
+      ...computeMetrics(raw),
+    });
+  }
+  out.sort((a, b) => b.spend_gbp - a.spend_gbp);
+  return out;
+}

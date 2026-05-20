@@ -8,12 +8,12 @@ import { KpiCardV2 } from '@/components/KpiCardV2';
 import { GaugeCard } from '@/components/GaugeCard';
 import { FunnelStrip, type FunnelStripData } from '@/components/FunnelStrip';
 import { ClientTableV2 } from '@/components/ClientTableV2';
-import { AdTable } from '@/components/AdTable';
+import { CampaignExplorer } from '@/components/CampaignExplorer';
 import { PlaceholderView } from '@/components/PlaceholderView';
 import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
 import {
-  defaultRange, getPortfolio, getAdAttribution, getClientList, getFunnelBreakdown, getFunnelList,
-  type ClientRow, type Totals,
+  defaultRange, getPortfolio, getCampaignExplorer, getClientList, getFunnelBreakdown, getFunnelList,
+  type ClientRow, type Totals, type CampaignNode,
 } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
@@ -62,13 +62,11 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   const scopedClient = view === 'client' ? clientFilter : undefined;
   const funnelClientId = view === 'funnel' ? clientFilter : undefined;
 
-  // Ad attribution works for any client now (UTM matched by Meta ad ID value,
-  // no per-client UTM-scheme rollout dependency).
-  const adClientIds = scopedClient ? [scopedClient] : [];
-
-  const [{ rows, totals, freshness }, adRows, clients, funnelList, funnelAnalyticsBreakdown] = await Promise.all([
+  const [{ rows, totals, freshness }, campaigns, clients, funnelList, funnelAnalyticsBreakdown] = await Promise.all([
     getPortfolio(range, scopedClient),
-    view === 'client' ? getAdAttribution(range, adClientIds) : Promise.resolve([]),
+    view === 'client' && scopedClient
+      ? getCampaignExplorer(scopedClient, range)
+      : Promise.resolve([] as CampaignNode[]),
     getClientList(),
     view === 'funnel' ? getFunnelList() : Promise.resolve([]),
     view === 'funnel' && funnelClientId
@@ -115,7 +113,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
               client={activeClient}
               totals={totals}
               rangeDays={rangeDays}
-              adRows={adRows}
+              campaigns={campaigns}
             />
           ) : (
             <NoClientSelected />
@@ -239,12 +237,12 @@ function ClientDetailView({
   client,
   totals,
   rangeDays,
-  adRows,
+  campaigns,
 }: {
   client: { client_id: string; client_name: string };
   totals: Totals;
   rangeDays: number;
-  adRows: Awaited<ReturnType<typeof getAdAttribution>>;
+  campaigns: CampaignNode[];
 }) {
   return (
     <div className="space-y-6 p-8">
@@ -262,7 +260,7 @@ function ClientDetailView({
       </div>
       <HeroKpis totals={totals} rangeDays={rangeDays} />
       <SecondaryKpis totals={totals} />
-      {adRows.length > 0 && <AdTable rows={adRows} />}
+      <CampaignExplorer campaigns={campaigns} />
     </div>
   );
 }
