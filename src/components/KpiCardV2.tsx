@@ -28,7 +28,7 @@ export function KpiCardV2({
           <Icon size={13} className="text-fg-muted" />
         </div>
       </div>
-      <div className={cn('font-bold tracking-tight text-fg tabular-nums', hero ? 'text-3xl' : 'text-2xl')}>
+      <div className={cn('font-extrabold tracking-tight text-fg tabular-nums', hero ? 'text-3xl' : 'text-2xl')}>
         {value}
       </div>
     </div>
