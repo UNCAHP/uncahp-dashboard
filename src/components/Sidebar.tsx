@@ -59,7 +59,7 @@ export function Sidebar({
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pink text-[10px] font-bold text-black">UN</div>
               <div>
                 <div className="text-sm font-bold leading-tight text-fg">UNCAHP</div>
-                <div className="text-[9px] uppercase tracking-widest text-fg-dim">Client Dashboard</div>
+                <div className="text-[9px] uppercase tracking-widest text-fg">Client Dashboard</div>
               </div>
             </div>
             <button onClick={() => setCollapsed(true)} className="text-fg-dim hover:text-fg" aria-label="Collapse sidebar">
@@ -108,7 +108,7 @@ export function Sidebar({
       {!collapsed && (
         <>
           <div className="px-4 pb-2 pt-4">
-            <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-fg-dim">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-fg">
               Clients ({clients.length})
             </div>
             <div className="relative">
@@ -117,7 +117,7 @@ export function Sidebar({
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 placeholder="Search clients..."
-                className="w-full rounded-lg border border-border bg-surface py-1.5 pl-7 pr-2 text-xs text-fg placeholder:text-fg-dim focus:border-border-strong focus:outline-none"
+                className="w-full rounded-lg border border-border bg-surface py-1.5 pl-7 pr-2 text-xs text-fg placeholder:text-fg-muted focus:border-border-strong focus:outline-none"
               />
             </div>
           </div>
@@ -131,8 +131,8 @@ export function Sidebar({
                   href={buildHref({ view: 'client', client: c.client_id, days })}
                   prefetch={false}
                   className={cn(
-                    'flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-xs transition-colors',
-                    active ? 'bg-surface text-fg' : 'text-fg hover:bg-surface/60 hover:text-pink',
+                    'flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-xs font-medium transition-colors',
+                    active ? 'bg-pink text-black' : 'text-fg hover:bg-surface/60 hover:text-pink',
                   )}
                 >
                   <div
