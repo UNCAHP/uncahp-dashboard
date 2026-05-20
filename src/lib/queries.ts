@@ -122,8 +122,7 @@ export async function getPortfolio(
   clientFilter?: string,
 ): Promise<{ rows: ClientRow[]; totals: Totals; freshness: FreshnessReport }> {
   type MetaRow = { client_id: string; client_name: string | null; spend_cents: number | null; leads: number | null; purchases: number | null; actions: unknown };
-  type ContactRow = { location_id: string };
-  type OppRow = { location_id: string; contact_id: string | null };
+  type ContactRow = { location_id: string; tags: unknown };
 
   const buildMetaQ = () => {
     let q = supabase
@@ -138,19 +137,9 @@ export async function getPortfolio(
   const buildContactsQ = () => {
     let q = supabase
       .from('ghl_contacts')
-      .select('location_id')
+      .select('location_id, tags')
       .gte('date_added', `${range.since}T00:00:00Z`)
       .lte('date_added', `${range.until}T23:59:59Z`);
-    if (clientFilter) q = q.eq('location_id', clientFilter);
-    return q;
-  };
-  const buildOppsQ = () => {
-    let q = supabase
-      .from('ghl_opportunities')
-      .select('location_id, contact_id')
-      .gte('created_at', `${range.since}T00:00:00Z`)
-      .lte('created_at', `${range.until}T23:59:59Z`)
-      .eq('status', 'won');
     if (clientFilter) q = q.eq('location_id', clientFilter);
     return q;
   };
@@ -215,10 +204,9 @@ export async function getPortfolio(
   type TxnCoverageRow = { location_id: string };
   type FunnelRow = { location_id: string; source_id: string };
   type RevenueRow = { location_id: string; total_revenue_gbp: number | null };
-  const [spendData, leadsData, bookingsData, txnsData, txnsCoverage, funnelsData, revenueData, freshnessMeta, freshnessGhl] = await Promise.all([
+  const [spendData, leadsData, txnsData, txnsCoverage, funnelsData, revenueData, freshnessMeta, freshnessGhl] = await Promise.all([
     fetchAll<MetaRow>(buildMetaQ),
     fetchAll<ContactRow>(buildContactsQ),
-    fetchAll<OppRow>(buildOppsQ),
     fetchAll<TxnRow>(buildTxnsQ),
     fetchAll<TxnCoverageRow>(buildTxnsCoverageQ),
     fetchAll<FunnelRow>(buildFunnelsQ),
@@ -252,22 +240,6 @@ export async function getPortfolio(
   }
   const clientsWithGhlTxnCoverage = new Set<string>();
   for (const r of txnsCoverage) clientsWithGhlTxnCoverage.add(r.location_id);
-
-  // Bookings: unique customers who either paid any deposit (funnel OR direct)
-  // or have a won opportunity (e.g. phone-booked, no online payment).
-  const bookingContactsByClient = new Map<string, Set<string>>();
-  for (const t of txnsData) {
-    if (!t.contact_source_id) continue;
-    const set = bookingContactsByClient.get(t.location_id) ?? new Set<string>();
-    set.add(t.contact_source_id);
-    bookingContactsByClient.set(t.location_id, set);
-  }
-  for (const o of bookingsData) {
-    if (!o.contact_id) continue;
-    const set = bookingContactsByClient.get(o.location_id) ?? new Set<string>();
-    set.add(o.contact_id);
-    bookingContactsByClient.set(o.location_id, set);
-  }
 
   // Aggregate spend + funnel events per client (from meta_daily_stats)
   type MetaAccum = {
@@ -303,22 +275,16 @@ export async function getPortfolio(
     }
   }
 
-  // GHL leads per location
+  // GHL leads + bookings per location, both from contacts created in range.
+  // A "booking" is a contact carrying the `booked` tag — the conversion signal
+  // set by each client's GHL workflow when a lead books an appointment.
   const leadsByClient = new Map<string, number>();
+  const bookingsByClient = new Map<string, number>();
   for (const r of leadsData) {
     leadsByClient.set(r.location_id, (leadsByClient.get(r.location_id) ?? 0) + 1);
-  }
-
-  // Bookings per location: prefer the unique-contact union of (deposit-payers ∪ won opps)
-  // when the client has GHL transaction coverage. For pixel-only clients, fall back to
-  // the won-opps count (existing behaviour) so we don't regress those rows.
-  const bookingsByClient = new Map<string, number>();
-  for (const r of bookingsData) {
-    bookingsByClient.set(r.location_id, (bookingsByClient.get(r.location_id) ?? 0) + 1);
-  }
-  for (const [client_id, contacts] of bookingContactsByClient.entries()) {
-    if (clientsWithGhlTxnCoverage.has(client_id)) {
-      bookingsByClient.set(client_id, contacts.size);
+    const tags = Array.isArray(r.tags) ? (r.tags as unknown[]) : [];
+    if (tags.some(t => typeof t === 'string' && t.toLowerCase() === 'booked')) {
+      bookingsByClient.set(r.location_id, (bookingsByClient.get(r.location_id) ?? 0) + 1);
     }
   }
 
