@@ -323,7 +323,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
                             <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-fg-muted">
                               Ad Set
                             </span>
-                            <span className="truncate text-xs font-medium text-fg-muted">{adset.name}</span>
+                            <span className="truncate text-xs font-medium text-fg">{adset.name}</span>
                           </div>
                           <div className="flex w-[150px] shrink-0 justify-center">
                             <StatusPill status={adset.status} />
@@ -369,7 +369,7 @@ function AdRow({ ad, cols }: { ad: AdNode; cols: MetricKey[] }) {
             <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-fg-dim">
               Ad
             </span>
-            <span className="truncate text-xs text-fg-muted">{ad.name}</span>
+            <span className="truncate text-xs text-fg">{ad.name}</span>
           </div>
           {ad.headline && <div className="mt-0.5 truncate text-[10px] text-fg-dim">{ad.headline}</div>}
         </div>
