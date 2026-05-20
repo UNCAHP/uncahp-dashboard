@@ -31,7 +31,7 @@ export function GaugeCard({
       title={hint}
     >
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-dim">{label}</span>
+        <span className="text-[11px] font-bold uppercase tracking-wider text-fg">{label}</span>
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-surface-2">
           <Icon size={13} className="text-fg-muted" />
         </div>
