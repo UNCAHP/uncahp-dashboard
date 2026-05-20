@@ -5,6 +5,7 @@ import {
 import { Sidebar } from '@/components/Sidebar';
 import { Topbar } from '@/components/Topbar';
 import { KpiCardV2 } from '@/components/KpiCardV2';
+import { GaugeCard } from '@/components/GaugeCard';
 import { FunnelStrip, type FunnelStripData } from '@/components/FunnelStrip';
 import { ClientTableV2 } from '@/components/ClientTableV2';
 import { FunnelBreakdown } from '@/components/FunnelBreakdown';
@@ -52,6 +53,10 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   const clientFilter = params.client?.trim() || undefined;
   const funnelFilter = params.funnel?.trim() || undefined;
   const view = parseView(params.view);
+  const rangeDays = Math.max(
+    1,
+    Math.round((Date.parse(range.until) - Date.parse(range.since)) / 86_400_000) + 1,
+  );
 
   // For Overview views we want portfolio totals (no client filter).
   // For Client view, scope to that client. Funnel view uses its own client selector.
@@ -107,13 +112,14 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
           client={view === 'funnel' ? funnelClientId : scopedClient}
           funnel={funnelFilter}
         />
-        {view === 'overview' && <OverviewView rows={rows} totals={totals} since={range.since} until={range.until} />}
+        {view === 'overview' && <OverviewView rows={rows} totals={totals} rangeDays={rangeDays} since={range.since} until={range.until} />}
         {view === 'client' && (
           activeClient ? (
             <ClientDetailView
               client={activeClient}
               rows={rows}
               totals={totals}
+              rangeDays={rangeDays}
               funnelBreakdown={funnelBreakdown}
               adRows={adRows}
             />
@@ -140,28 +146,49 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   );
 }
 
-function HeroKpis({ totals }: { totals: Totals }) {
+// Placeholder portfolio targets (monthly). Per-client targets + ad budgets will
+// come from the client-config panel — for now these drive the gauge fills so the
+// dials are visible. Volume targets scale with the selected range; ratio targets
+// (CPL, ROAS) don't.
+const MONTHLY_TARGETS = { spend: 35000, leads: 5000, cpl: 8, patients: 200, revenue: 90000, roas: 5 };
+
+const clamp01 = (n: number) => Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0));
+
+function HeroKpis({ totals, rangeDays }: { totals: Totals; rangeDays: number }) {
+  const scale = rangeDays / 30;
+  const fill = {
+    spend: clamp01(totals.spend_gbp / (MONTHLY_TARGETS.spend * scale)),
+    leads: clamp01(totals.leads / (MONTHLY_TARGETS.leads * scale)),
+    // CPL: lower is better — fill = target / actual.
+    cpl: clamp01(totals.cpl_gbp ? MONTHLY_TARGETS.cpl / totals.cpl_gbp : 0),
+    patients: clamp01(totals.bookings / (MONTHLY_TARGETS.patients * scale)),
+    revenue: clamp01((totals.revenue_gbp ?? 0) / (MONTHLY_TARGETS.revenue * scale)),
+    roas: clamp01((totals.roas ?? 0) / MONTHLY_TARGETS.roas),
+  };
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <KpiCardV2 label="Total Spend" value={formatGBP(totals.spend_gbp, { decimals: 0 })} icon={PoundSterling} hero />
-      <KpiCardV2 label="Total Leads" value={formatNumber(totals.leads)} icon={Users} hero />
-      <KpiCardV2
+      <GaugeCard label="Total Spend" value={formatGBP(totals.spend_gbp, { decimals: 0 })} fillPct={fill.spend} icon={PoundSterling} hero />
+      <GaugeCard label="Total Leads" value={formatNumber(totals.leads)} fillPct={fill.leads} icon={Users} hero />
+      <GaugeCard
         label="Cost Per Lead"
         value={totals.cpl_gbp != null ? formatGBP(totals.cpl_gbp, { decimals: 2 }) : '—'}
+        fillPct={fill.cpl}
         icon={TrendingDown}
         hero
       />
-      <KpiCardV2 label="Patients" value={formatNumber(totals.bookings)} icon={UserCheck} hero hint="Patients booked — contacts tagged 'booked' in GHL" />
-      <KpiCardV2
+      <GaugeCard label="Patients" value={formatNumber(totals.bookings)} fillPct={fill.patients} icon={UserCheck} hero hint="Patients booked — contacts tagged 'booked' in GHL" />
+      <GaugeCard
         label="Revenue"
         value={totals.revenue_gbp != null ? formatGBP(totals.revenue_gbp, { decimals: 0 }) : '—'}
+        fillPct={fill.revenue}
         icon={DollarSign}
         hero
         hint="Treatment revenue from the client's Profit Tracker"
       />
-      <KpiCardV2
+      <GaugeCard
         label="ROAS"
         value={totals.roas != null ? `${totals.roas.toFixed(2)}x` : '—'}
+        fillPct={fill.roas}
         icon={Sparkles}
         hero
         hint="Revenue ÷ ad spend"
@@ -199,14 +226,14 @@ function buildFunnelStrip(totals: Totals): FunnelStripData {
   };
 }
 
-function OverviewView({ rows, totals, since, until }: { rows: ClientRow[]; totals: Totals; since: string; until: string }) {
+function OverviewView({ rows, totals, rangeDays, since, until }: { rows: ClientRow[]; totals: Totals; rangeDays: number; since: string; until: string }) {
   return (
     <div className="space-y-6 p-8">
       <div>
         <h1 className="text-3xl font-bold tracking-tight text-fg">Portfolio Overview</h1>
         <p className="mt-1 text-sm text-fg-muted">{rows.length} active clients · Meta Ads × GHL</p>
       </div>
-      <HeroKpis totals={totals} />
+      <HeroKpis totals={totals} rangeDays={rangeDays} />
       <SecondaryKpis totals={totals} />
       <FunnelStrip data={buildFunnelStrip(totals)} detailHref={`/?view=funnel&since=${since}&until=${until}`} />
       <ClientTableV2 rows={rows} since={since} until={until} />
@@ -218,12 +245,14 @@ function ClientDetailView({
   client,
   rows,
   totals,
+  rangeDays,
   funnelBreakdown,
   adRows,
 }: {
   client: { client_id: string; client_name: string };
   rows: ClientRow[];
   totals: Totals;
+  rangeDays: number;
   funnelBreakdown: Awaited<ReturnType<typeof getFunnelBreakdown>>;
   adRows: Awaited<ReturnType<typeof getAdAttribution>>;
 }) {
@@ -244,7 +273,7 @@ function ClientDetailView({
           <p className="mt-1 text-sm text-fg-muted">Meta Ads × GHL · scoped to this client</p>
         </div>
       </div>
-      <HeroKpis totals={totals} />
+      <HeroKpis totals={totals} rangeDays={rangeDays} />
       <SecondaryKpis totals={totals} />
       <FunnelStrip data={buildFunnelStrip(totals)} />
       <FunnelBreakdown funnels={funnelBreakdown} />
