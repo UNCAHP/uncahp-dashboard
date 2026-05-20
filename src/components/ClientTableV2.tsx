@@ -40,7 +40,7 @@ function colorForRoas(v: number | null) {
   return 'text-red';
 }
 
-export function ClientTableV2({ rows, days }: { rows: ClientRow[]; days: number }) {
+export function ClientTableV2({ rows, since, until }: { rows: ClientRow[]; since: string; until: string }) {
   const [sortBy, setSortBy] = useState<SortKey>('spend_gbp');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
@@ -97,7 +97,7 @@ export function ClientTableV2({ rows, days }: { rows: ClientRow[]; days: number 
                 <tr key={r.client_id} className="group border-b border-border/50 transition-colors last:border-0 hover:bg-surface-2">
                   <td className="px-5 py-3.5">
                     <Link
-                      href={`/?view=client&client=${r.client_id}&days=${days}`}
+                      href={`/?view=client&client=${r.client_id}&since=${since}&until=${until}`}
                       prefetch={false}
                       className="flex items-center gap-2.5"
                     >

@@ -18,24 +18,26 @@ const NAV: Array<{ id: View; label: string; icon: typeof LayoutGrid }> = [
   { id: 'admin', label: 'Admin Panel', icon: Shield },
 ];
 
-function buildHref(params: { view?: View; client?: string; days?: number }) {
+function buildHref(params: { view?: View; client?: string; since: string; until: string }) {
   const p = new URLSearchParams();
   if (params.view && params.view !== 'overview') p.set('view', params.view);
   if (params.client) p.set('client', params.client);
-  if (params.days) p.set('days', String(params.days));
-  const q = p.toString();
-  return q ? `/?${q}` : '/';
+  p.set('since', params.since);
+  p.set('until', params.until);
+  return `/?${p.toString()}`;
 }
 
 export function Sidebar({
   view,
   selectedClient,
-  days,
+  since,
+  until,
   clients,
 }: {
   view: View;
   selectedClient?: string;
-  days: number;
+  since: string;
+  until: string;
   clients: ClientOption[];
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -86,7 +88,8 @@ export function Sidebar({
           const href = buildHref({
             view: item.id,
             client: item.id === 'client' ? selectedClient : undefined,
-            days,
+            since,
+            until,
           });
           return (
             <Link
@@ -128,7 +131,7 @@ export function Sidebar({
               return (
                 <Link
                   key={c.client_id}
-                  href={buildHref({ view: 'client', client: c.client_id, days })}
+                  href={buildHref({ view: 'client', client: c.client_id, since, until })}
                   prefetch={false}
                   className={cn(
                     'flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-xs font-medium transition-colors',

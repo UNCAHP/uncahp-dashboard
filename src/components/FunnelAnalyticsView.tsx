@@ -16,7 +16,8 @@ type Props = {
   funnelClientId: string | null;
   funnelClientName: string | null;
   selectedFunnelId: string | null;
-  days: number;
+  since: string;
+  until: string;
 };
 
 export function FunnelAnalyticsView({
@@ -25,7 +26,8 @@ export function FunnelAnalyticsView({
   funnelClientId,
   funnelClientName,
   selectedFunnelId,
-  days,
+  since,
+  until,
 }: Props) {
   const router = useRouter();
   const [tab, setTab] = useState<'steps' | 'stats'>('steps');
@@ -45,7 +47,8 @@ export function FunnelAnalyticsView({
   const navigate = (next: { client?: string; funnel?: string }) => {
     const params = new URLSearchParams();
     params.set('view', 'funnel');
-    params.set('days', String(days));
+    params.set('since', since);
+    params.set('until', until);
     if (next.client) params.set('client', next.client);
     if (next.funnel) params.set('funnel', next.funnel);
     router.push(`/?${params.toString()}`);

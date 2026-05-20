@@ -22,17 +22,33 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'clients' | 'admin';
-type SearchParams = { days?: string; client?: string; view?: string; funnel?: string };
+type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string };
 
 function parseView(v: string | undefined): View {
   const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'clients', 'admin'];
   return (allowed as string[]).includes(v ?? '') ? (v as View) : 'overview';
 }
 
+const isISODate = (s: string | undefined): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+function rangeLabel(since: string, until: string): string {
+  const fmt = (s: string) => {
+    const [, m, d] = s.split('-');
+    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(m) - 1];
+    return `${Number(d)} ${mon}`;
+  };
+  return `${fmt(since)} – ${fmt(until)}`;
+}
+
 export default async function Page({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
-  const days = Math.max(1, Math.min(365, Number(params.days) || 30));
-  const range = defaultRange(days);
+  // Range: explicit since/until wins; otherwise fall back to days (default 30).
+  let range;
+  if (isISODate(params.since) && isISODate(params.until)) {
+    range = { since: params.since, until: params.until, label: rangeLabel(params.since, params.until) };
+  } else {
+    range = defaultRange(Math.max(1, Math.min(365, Number(params.days) || 30)));
+  }
   const clientFilter = params.client?.trim() || undefined;
   const funnelFilter = params.funnel?.trim() || undefined;
   const view = parseView(params.view);
@@ -79,19 +95,19 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
 
   return (
     <div className="flex min-h-screen bg-bg text-fg">
-      <Sidebar view={view} selectedClient={scopedClient} days={days} clients={clients} />
+      <Sidebar view={view} selectedClient={scopedClient} since={range.since} until={range.until} clients={clients} />
       <main className="min-w-0 flex-1">
         <Topbar
           title={titles[view].title}
           subtitle={titles[view].subtitle}
           freshness={freshness}
-          rangeLabel={`${range.since} → ${range.until}`}
+          since={range.since}
+          until={range.until}
           view={view}
           client={view === 'funnel' ? funnelClientId : scopedClient}
           funnel={funnelFilter}
-          days={days}
         />
-        {view === 'overview' && <OverviewView rows={rows} totals={totals} days={days} />}
+        {view === 'overview' && <OverviewView rows={rows} totals={totals} since={range.since} until={range.until} />}
         {view === 'client' && (
           activeClient ? (
             <ClientDetailView
@@ -112,7 +128,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
             funnelClientId={funnelClientId ?? null}
             funnelClientName={funnelClientName}
             selectedFunnelId={selectedAnalyticsFunnel?.funnel_id ?? null}
-            days={days}
+            since={range.since}
+            until={range.until}
           />
         )}
         {view === 'calls' && <PlaceholderView title="Call Tracking" subtitle="Inbound call performance and recordings" />}
@@ -182,7 +199,7 @@ function buildFunnelStrip(totals: Totals): FunnelStripData {
   };
 }
 
-function OverviewView({ rows, totals, days }: { rows: ClientRow[]; totals: Totals; days: number }) {
+function OverviewView({ rows, totals, since, until }: { rows: ClientRow[]; totals: Totals; since: string; until: string }) {
   return (
     <div className="space-y-6 p-8">
       <div>
@@ -191,8 +208,8 @@ function OverviewView({ rows, totals, days }: { rows: ClientRow[]; totals: Total
       </div>
       <HeroKpis totals={totals} />
       <SecondaryKpis totals={totals} />
-      <FunnelStrip data={buildFunnelStrip(totals)} detailHref={`/?view=funnel&days=${days}`} />
-      <ClientTableV2 rows={rows} days={days} />
+      <FunnelStrip data={buildFunnelStrip(totals)} detailHref={`/?view=funnel&since=${since}&until=${until}`} />
+      <ClientTableV2 rows={rows} since={since} until={until} />
     </div>
   );
 }
