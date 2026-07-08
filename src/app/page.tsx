@@ -1,8 +1,10 @@
+import { Suspense } from 'react';
 import {
   PoundSterling, Users, TrendingDown, UserCheck, DollarSign, Sparkles,
   Percent, Eye, ShoppingCart,
 } from 'lucide-react';
 import { Sidebar } from '@/components/Sidebar';
+import { DashboardSkeleton } from '@/components/DashboardSkeleton';
 import { Topbar } from '@/components/Topbar';
 import { KpiCardV2 } from '@/components/KpiCardV2';
 import { GaugeCard } from '@/components/GaugeCard';
@@ -43,8 +45,18 @@ function rangeLabel(since: string, until: string): string {
   return `${fmt(since)} – ${fmt(until)}`;
 }
 
+// Thin wrapper: a keyed Suspense boundary so the skeleton shows on the first load AND
+// on every navigation (date/view/client/funnel change re-keys → re-suspends → skeleton).
 export default async function Page({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
+  return (
+    <Suspense key={JSON.stringify(params)} fallback={<DashboardSkeleton />}>
+      <Dashboard params={params} />
+    </Suspense>
+  );
+}
+
+async function Dashboard({ params }: { params: SearchParams }) {
   // Range: explicit since/until wins; otherwise fall back to days (default 30).
   let range;
   if (isISODate(params.since) && isISODate(params.until)) {
