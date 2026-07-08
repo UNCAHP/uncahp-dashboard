@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import type { AdminFunnel, FunnelPageLink } from './funnelAdmin';
 
 export type DateRange = {
   since: string; // YYYY-MM-DD
@@ -21,6 +22,7 @@ export function defaultRange(days = 30): DateRange {
 export type ClientRow = {
   client_id: string;
   client_name: string;
+  logo_url?: string | null;
   spend_gbp: number;
   lp_views: number;
   lp_leads: number;   // Meta offsite_conversion.fb_pixel_lead — LP form submits
@@ -204,7 +206,7 @@ export async function getPortfolio(
   type TxnCoverageRow = { location_id: string };
   type FunnelRow = { location_id: string; source_id: string };
   type RevenueRow = { location_id: string; total_revenue_gbp: number | null };
-  const [spendData, leadsData, txnsData, txnsCoverage, funnelsData, revenueData, freshnessMeta, freshnessGhl] = await Promise.all([
+  const [spendData, leadsData, txnsData, txnsCoverage, funnelsData, revenueData, freshnessMeta, freshnessGhl, activeClients] = await Promise.all([
     fetchAll<MetaRow>(buildMetaQ),
     fetchAll<ContactRow>(buildContactsQ),
     fetchAll<TxnRow>(buildTxnsQ),
@@ -213,7 +215,12 @@ export async function getPortfolio(
     fetchAll<RevenueRow>(buildRevenueQ),
     metaFreshQ,
     ghlFreshQ,
+    getActiveClients(),
   ]);
+
+  // Strict allowlist: the registry is the source of truth. Only active clients (by
+  // GHL location id) appear, and their name/logo come from the registry.
+  const registry = new Map(activeClients.map(c => [c.client_id, c]));
 
   // Revenue per client (only clients with a connected Profit Tracker appear).
   const revenueByClient = new Map<string, number>();
@@ -288,16 +295,19 @@ export async function getPortfolio(
     }
   }
 
-  // Build rows from union of all client_ids that appeared in spend
+  // Build rows from clients that appeared in spend AND are active in the registry.
   const rows: ClientRow[] = [];
   for (const [client_id, m] of metaByClient.entries()) {
+    const reg = registry.get(client_id);
+    if (!reg) continue; // not an active registered client → hidden
     const spend_gbp = m.spend_cents / 100;
     const leads = leadsByClient.get(client_id) ?? 0;
     const bookings = bookingsByClient.get(client_id) ?? 0;
     const revenue_gbp = revenueByClient.has(client_id) ? revenueByClient.get(client_id)! : null;
     rows.push({
       client_id,
-      client_name: m.client_name,
+      client_name: reg.client_name || m.client_name,
+      logo_url: reg.logo_url ?? null,
       spend_gbp,
       lp_views: m.lp_views,
       lp_leads: m.lp_leads,
@@ -693,6 +703,85 @@ export async function getFunnelBreakdown(
   return out;
 }
 
+// ─── Registry funnel metrics (LP Views → Opt-ins → Deposits) ─────────────────
+// The new tracking model: LP views from Meta landing_page_view (for the funnel's
+// mapped campaigns), opt-ins + deposits from GHL contact tags (ANY tag matches).
+
+export type FunnelMetrics = {
+  funnel_id: string;
+  funnel_name: string;
+  client_id: string;
+  lp_views: number | null;        // null when no campaigns are mapped
+  optins: number;
+  deposits: number;
+  optin_rate_pct: number | null;   // opt-ins ÷ LP views
+  deposit_rate_pct: number | null; // deposits ÷ opt-ins
+  pages: FunnelPageLink[];
+  optin_tags: string[];
+  deposit_tags: string[];
+  meta_campaign_count: number;
+};
+
+export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): Promise<FunnelMetrics> {
+  // LP views from Meta landing_page_view for the mapped campaigns.
+  let lp_views: number | null = null;
+  if (funnel.meta_campaign_ids.length > 0) {
+    type StatRow = { actions: unknown };
+    const rows = await fetchAll<StatRow>(() =>
+      supabase
+        .from('meta_daily_stats')
+        .select('actions')
+        .in('campaign_source_id', funnel.meta_campaign_ids)
+        .gte('date', range.since)
+        .lte('date', range.until),
+    );
+    lp_views = rows.reduce((s, r) => s + extractAction(r.actions, 'landing_page_view'), 0);
+  }
+
+  // Opt-ins + deposits: count contacts (added in range) carrying ANY matching tag.
+  type ContactRow = { tags: unknown };
+  const contacts = await fetchAll<ContactRow>(() =>
+    supabase
+      .from('ghl_contacts')
+      .select('tags')
+      .eq('location_id', funnel.client_id)
+      .gte('date_added', `${range.since}T00:00:00Z`)
+      .lte('date_added', `${range.until}T23:59:59Z`),
+  );
+  const optinSet = new Set(funnel.optin_tags.map(t => t.toLowerCase()));
+  const depositSet = new Set(funnel.deposit_tags.map(t => t.toLowerCase()));
+  // A deposit is identified by tags UNIQUE to the deposit set (e.g. "deposit paid").
+  // Tags shared with the opt-in set don't distinguish a deposit, so they're excluded
+  // here — otherwise opt-ins and deposits collapse to the same contacts.
+  const depositSignal = new Set([...depositSet].filter(t => !optinSet.has(t)));
+  let optins = 0;
+  let deposits = 0;
+  for (const c of contacts) {
+    const tags = Array.isArray(c.tags) ? c.tags.map(t => String(t).toLowerCase()) : [];
+    const isDeposit = depositSignal.size > 0 && tags.some(t => depositSignal.has(t));
+    // Opt-in = carries an opt-in tag but has NOT reached deposit (mutually exclusive).
+    const isOptin = optinSet.size > 0 && tags.some(t => optinSet.has(t)) && !isDeposit;
+    if (isDeposit) deposits++;
+    if (isOptin) optins++;
+  }
+
+  const rate = (n: number, d: number | null) => (d && d > 0 ? +((100 * n) / d).toFixed(2) : null);
+  return {
+    funnel_id: funnel.id,
+    funnel_name: funnel.name,
+    client_id: funnel.client_id,
+    lp_views,
+    optins,
+    deposits,
+    optin_rate_pct: rate(optins, lp_views),
+    deposit_rate_pct: rate(deposits, optins),
+    pages: funnel.pages,
+    optin_tags: funnel.optin_tags,
+    deposit_tags: funnel.deposit_tags,
+    meta_campaign_count: funnel.meta_campaign_ids.length,
+  };
+}
+
 export type FunnelListItem = {
   client_id: string;
   client_name: string;
@@ -725,25 +814,29 @@ export async function getFunnelList(): Promise<FunnelListItem[]> {
     );
 }
 
-export type ClientOption = { client_id: string; client_name: string };
+export type ClientOption = { client_id: string; client_name: string; logo_url?: string | null };
 
-export async function getClientList(): Promise<ClientOption[]> {
-  // One row per client in meta_accounts (avoids the 1000-row default page limit
-  // that bites when querying meta_daily_stats).
+// Active clients from the registry (the source of truth). client_id here is the
+// GHL location id — the canonical key the rest of the app joins on. Only clients
+// with a linked ghl_location_id are returned, since without it there's no data to
+// join. Archived clients are excluded everywhere by design (strict allowlist).
+export async function getActiveClients(): Promise<ClientOption[]> {
   const { data, error } = await supabase
-    .from('meta_accounts')
-    .select('client_id, client_name')
-    .neq('client_id', 'UNCAHP_AGENCY')
+    .from('clients')
+    .select('client_name, ghl_location_id, logo_url')
+    .eq('status', 'active')
+    .not('ghl_location_id', 'is', null)
     .order('client_name');
   if (error) throw error;
-  const seen = new Set<string>();
-  const out: ClientOption[] = [];
-  for (const r of data ?? []) {
-    if (!r.client_id || seen.has(r.client_id)) continue;
-    seen.add(r.client_id);
-    out.push({ client_id: r.client_id, client_name: r.client_name ?? r.client_id });
-  }
-  return out;
+  return (data ?? []).map(r => ({
+    client_id: r.ghl_location_id as string,
+    client_name: r.client_name ?? (r.ghl_location_id as string),
+    logo_url: r.logo_url ?? null,
+  }));
+}
+
+export async function getClientList(): Promise<ClientOption[]> {
+  return getActiveClients();
 }
 
 // ─── Campaign Explorer (Campaign → Ad Set → Ad tree, with metrics) ───────────

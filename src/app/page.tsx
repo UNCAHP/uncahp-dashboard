@@ -11,10 +11,13 @@ import { ClientTableV2 } from '@/components/ClientTableV2';
 import { CampaignExplorer } from '@/components/CampaignExplorer';
 import { PlaceholderView } from '@/components/PlaceholderView';
 import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
+import { ClientsView } from '@/components/ClientsView';
 import {
-  defaultRange, getPortfolio, getCampaignExplorer, getClientList, getFunnelBreakdown, getFunnelList,
+  defaultRange, getPortfolio, getCampaignExplorer, getClientList, getFunnelMetrics,
   type ClientRow, type Totals, type CampaignNode,
 } from '@/lib/queries';
+import { getAdminClients } from '@/lib/clientAdmin';
+import { getAdminFunnels } from '@/lib/funnelAdmin';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 
@@ -62,21 +65,26 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   const scopedClient = view === 'client' ? clientFilter : undefined;
   const funnelClientId = view === 'funnel' ? clientFilter : undefined;
 
-  const [{ rows, totals, freshness }, campaigns, clients, funnelList, funnelAnalyticsBreakdown] = await Promise.all([
+  const [{ rows, totals, freshness }, campaigns, clients, adminClients, adminFunnels] = await Promise.all([
     getPortfolio(range, scopedClient),
     view === 'client' && scopedClient
       ? getCampaignExplorer(scopedClient, range)
       : Promise.resolve([] as CampaignNode[]),
     getClientList(),
-    view === 'funnel' ? getFunnelList() : Promise.resolve([]),
-    view === 'funnel' && funnelClientId
-      ? getFunnelBreakdown(funnelClientId, range)
-      : Promise.resolve([]),
+    view === 'clients' ? getAdminClients() : Promise.resolve([]),
+    view === 'funnel' ? getAdminFunnels() : Promise.resolve([]),
   ]);
 
-  const selectedAnalyticsFunnel = funnelAnalyticsBreakdown.find(f => f.funnel_id === funnelFilter)
-    ?? funnelAnalyticsBreakdown.find(f => !f.is_synthetic)
-    ?? null;
+  // Funnel Analytics. Default view = overview of all active funnels (grouped by
+  // client, or scoped to the selected client). Drilling into a specific funnel
+  // (?funnel=) shows its detailed LP Views → Opt-ins → Deposits breakdown.
+  const activeFunnels = adminFunnels.filter(f => f.status === 'active');
+  const clientFunnels = funnelClientId ? activeFunnels.filter(f => f.client_id === funnelClientId) : [];
+  const selectedFunnel = funnelFilter ? activeFunnels.find(f => f.id === funnelFilter) ?? null : null;
+  const funnelsToShow = view === 'funnel'
+    ? (selectedFunnel ? [selectedFunnel] : (funnelClientId ? clientFunnels : activeFunnels))
+    : [];
+  const funnelMetricsList = await Promise.all(funnelsToShow.map(f => getFunnelMetrics(f, range)));
   const funnelClientName = funnelClientId
     ? clients.find(c => c.client_id === funnelClientId)?.client_name ?? null
     : null;
@@ -121,17 +129,18 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
         )}
         {view === 'funnel' && (
           <FunnelAnalyticsView
-            funnelList={funnelList}
-            funnel={selectedAnalyticsFunnel}
+            clients={clients}
+            adminFunnels={adminFunnels}
+            metricsList={funnelMetricsList}
             funnelClientId={funnelClientId ?? null}
             funnelClientName={funnelClientName}
-            selectedFunnelId={selectedAnalyticsFunnel?.funnel_id ?? null}
+            selectedFunnelId={selectedFunnel?.id ?? null}
             since={range.since}
             until={range.until}
           />
         )}
         {view === 'calls' && <PlaceholderView title="Call Tracking" subtitle="Inbound call performance and recordings" />}
-        {view === 'clients' && <PlaceholderView title="Clients" subtitle="Manage client accounts, contracts and team access" />}
+        {view === 'clients' && <ClientsView clients={adminClients} />}
         {view === 'admin' && <PlaceholderView title="Admin Panel" subtitle="Team, integrations and workspace settings" />}
       </main>
     </div>
@@ -239,7 +248,7 @@ function ClientDetailView({
   rangeDays,
   campaigns,
 }: {
-  client: { client_id: string; client_name: string };
+  client: { client_id: string; client_name: string; logo_url?: string | null };
   totals: Totals;
   rangeDays: number;
   campaigns: CampaignNode[];
@@ -247,12 +256,17 @@ function ClientDetailView({
   return (
     <div className="space-y-6 p-8">
       <div className="flex items-center gap-4">
-        <div
-          className="flex h-12 w-12 items-center justify-center rounded-xl text-sm font-bold text-fg-muted"
-          style={{ background: clientColor(client.client_id) }}
-        >
-          {clientInitials(client.client_name)}
-        </div>
+        {client.logo_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={client.logo_url} alt="" className="h-12 w-12 rounded-xl border border-border object-cover" />
+        ) : (
+          <div
+            className="flex h-12 w-12 items-center justify-center rounded-xl text-sm font-bold text-fg-muted"
+            style={{ background: clientColor(client.client_id) }}
+          >
+            {clientInitials(client.client_name)}
+          </div>
+        )}
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-fg">{client.client_name}</h1>
           <p className="mt-1 text-sm text-fg-muted">Meta Ads × GHL · scoped to this client</p>

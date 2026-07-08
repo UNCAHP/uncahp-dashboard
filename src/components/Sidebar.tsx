@@ -6,6 +6,7 @@ import { LayoutGrid, BarChart3, FlaskConical, Phone, Building2, Shield, ChevronL
 import type { ClientOption } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn } from '@/lib/utils';
+import { Tooltip } from '@/components/Tooltip';
 
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'clients' | 'admin';
 
@@ -138,13 +139,18 @@ export function Sidebar({
                     active ? 'bg-pink text-black' : 'text-fg hover:bg-surface/60 hover:text-pink',
                   )}
                 >
-                  <div
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[9px] font-bold text-fg-muted"
-                    style={{ background: clientColor(c.client_id) }}
-                  >
-                    {clientInitials(c.client_name)}
-                  </div>
-                  <span className="truncate text-left">{c.client_name}</span>
+                  {c.logo_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={c.logo_url} alt="" className="h-6 w-6 shrink-0 rounded-md border border-border object-cover" />
+                  ) : (
+                    <div
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[9px] font-bold text-fg-muted"
+                      style={{ background: clientColor(c.client_id) }}
+                    >
+                      {clientInitials(c.client_name)}
+                    </div>
+                  )}
+                  <Tooltip label={c.client_name} className="text-left">{c.client_name}</Tooltip>
                 </Link>
               );
             })}

@@ -101,12 +101,17 @@ export function ClientTableV2({ rows, since, until }: { rows: ClientRow[]; since
                       prefetch={false}
                       className="flex items-center gap-2.5"
                     >
-                      <div
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[9px] font-bold text-fg-muted"
-                        style={{ background: clientColor(r.client_id) }}
-                      >
-                        {clientInitials(r.client_name || r.client_id)}
-                      </div>
+                      {r.logo_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={r.logo_url} alt="" className="h-6 w-6 shrink-0 rounded-md border border-border object-cover" />
+                      ) : (
+                        <div
+                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[9px] font-bold text-fg-muted"
+                          style={{ background: clientColor(r.client_id) }}
+                        >
+                          {clientInitials(r.client_name || r.client_id)}
+                        </div>
+                      )}
                       <span className="text-sm text-fg group-hover:text-pink-soft">
                         {r.client_name || r.client_id}
                       </span>

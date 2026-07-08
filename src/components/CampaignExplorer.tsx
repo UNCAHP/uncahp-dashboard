@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronRight, ImageOff, SlidersHorizontal, X } from 'lucide-react';
 import type { CampaignNode, AdNode, CampaignMetrics } from '@/lib/queries';
 import { cn, formatGBP, formatNumber } from '@/lib/utils';
+import { Tooltip } from '@/components/Tooltip';
 
 type StatusFilter = 'all' | 'active';
 type MetricKey =
@@ -291,7 +292,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
                     <span className="rounded bg-pink/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-pink">
                       Campaign
                     </span>
-                    <span className="truncate text-sm font-semibold text-fg">{campaign.name}</span>
+                    <Tooltip label={campaign.name} className="text-sm font-semibold text-fg">{campaign.name}</Tooltip>
                   </div>
                   <div className="flex w-[150px] shrink-0 justify-center">
                     <StatusPill status={campaign.status} />
@@ -323,7 +324,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
                             <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-fg-muted">
                               Ad Set
                             </span>
-                            <span className="truncate text-xs font-medium text-fg">{adset.name}</span>
+                            <Tooltip label={adset.name} className="text-xs font-medium text-fg">{adset.name}</Tooltip>
                           </div>
                           <div className="flex w-[150px] shrink-0 justify-center">
                             <StatusPill status={adset.status} />
@@ -368,7 +369,7 @@ function AdRow({ ad, cols }: { ad: AdNode; cols: MetricKey[] }) {
           <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-fg-dim">
             Ad
           </span>
-          <span className="truncate text-xs text-fg">{ad.name}</span>
+          <Tooltip label={ad.name} className="text-xs text-fg">{ad.name}</Tooltip>
         </div>
       </div>
       <div className="flex w-[150px] shrink-0 justify-center">

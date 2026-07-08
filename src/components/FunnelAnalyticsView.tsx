@@ -1,18 +1,19 @@
 'use client';
 
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowUpRight, ChevronRight, FlaskConical, Sparkles } from 'lucide-react';
-import type { FunnelBreakdown, FunnelListItem, FunnelStep, FunnelPage } from '@/lib/queries';
-import { cn, formatGBP, formatNumber } from '@/lib/utils';
-
-const PINK = '#f7a5de';
-const PINK_DIM = 'rgba(247, 165, 222, 0.15)';
-const PINK_BORDER = 'rgba(247, 165, 222, 0.3)';
+import { Eye, MousePointerClick, Landmark, ExternalLink, FlaskConical, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle } from 'lucide-react';
+import type { ClientOption, FunnelMetrics } from '@/lib/queries';
+import type { AdminFunnel, FunnelPageLink } from '@/lib/funnelAdmin';
+import { FunnelFormModal } from '@/components/FunnelsManager';
+import { setFunnelStatusAction } from '@/app/actions/funnels';
+import { clientInitials, clientColor } from '@/lib/clientVisuals';
+import { cn, formatNumber, formatPercent } from '@/lib/utils';
 
 type Props = {
-  funnelList: FunnelListItem[];
-  funnel: FunnelBreakdown | null;
+  clients: ClientOption[];
+  adminFunnels: AdminFunnel[];
+  metricsList: FunnelMetrics[];
   funnelClientId: string | null;
   funnelClientName: string | null;
   selectedFunnelId: string | null;
@@ -21,28 +22,18 @@ type Props = {
 };
 
 export function FunnelAnalyticsView({
-  funnelList,
-  funnel,
-  funnelClientId,
-  funnelClientName,
-  selectedFunnelId,
-  since,
-  until,
+  clients, adminFunnels, metricsList, funnelClientId, funnelClientName, selectedFunnelId, since, until,
 }: Props) {
   const router = useRouter();
-  const [tab, setTab] = useState<'steps' | 'stats'>('steps');
+  const [editing, setEditing] = useState<AdminFunnel | 'new' | null>(null);
 
-  // Group funnels by client for the dropdown
-  const clients = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const f of funnelList) seen.set(f.client_id, f.client_name);
-    return Array.from(seen.entries()).map(([client_id, client_name]) => ({ client_id, client_name }));
-  }, [funnelList]);
-
-  const funnelsForClient = useMemo(
-    () => funnelList.filter(f => !funnelClientId || f.client_id === funnelClientId),
-    [funnelList, funnelClientId],
-  );
+  const active = adminFunnels.filter(f => f.status === 'active');
+  const clientIdsWithFunnels = new Set(active.map(f => f.client_id));
+  const clientOptions = clients.filter(c => clientIdsWithFunnels.has(c.client_id));
+  const clientFunnels = funnelClientId ? active.filter(f => f.client_id === funnelClientId) : [];
+  const clientInfo = new Map(clients.map(c => [c.client_id, c]));
+  const selectedAdmin = selectedFunnelId ? active.find(f => f.id === selectedFunnelId) ?? null : null;
+  const archived = adminFunnels.filter(f => f.status === 'archived' && (!funnelClientId || f.client_id === funnelClientId));
 
   const navigate = (next: { client?: string; funnel?: string }) => {
     const params = new URLSearchParams();
@@ -54,512 +45,428 @@ export function FunnelAnalyticsView({
     router.push(`/?${params.toString()}`);
   };
 
-  // Real metrics: deposits + revenue (per variant / per step / total). LP views and
-  // opt-ins still require LP-side instrumentation we don't have yet — show as "—".
-  const totals = funnel
-    ? {
-        deposits: funnel.total_deposits,
-        revenue_gbp: funnel.total_amount_gbp,
-      }
-    : { deposits: 0, revenue_gbp: 0 };
+  const detail = selectedFunnelId ? metricsList.find(m => m.funnel_id === selectedFunnelId) ?? null : null;
 
   return (
     <div className="space-y-6 p-8">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-fg">Funnel Analytics</h1>
-        <p className="mt-1 text-sm text-fg-muted">
-          Variant performance and full-funnel attribution · GHL funnels (page views + opt-ins land
-          when LPs move to our own hosting).
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-fg">Funnel Analytics</h1>
+          <p className="mt-1 text-sm text-fg-muted">
+            LP views (Meta) → opt-ins → deposits (GHL tags), per registered funnel.
+          </p>
+        </div>
+        <button
+          onClick={() => setEditing('new')}
+          className="inline-flex items-center gap-2 rounded-lg bg-pink px-3.5 py-2 text-sm font-semibold text-black transition-colors hover:bg-pink-soft"
+        >
+          <Plus size={16} /> Add funnel
+        </button>
       </div>
 
       {/* Selectors */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative">
-          <select
-            value={funnelClientId ?? ''}
-            onChange={e => {
-              const cid = e.target.value;
-              const first = funnelList.find(f => f.client_id === cid);
-              navigate({ client: cid, funnel: first?.funnel_id });
-            }}
-            className="cursor-pointer appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-8 text-xs text-fg focus:border-border-strong focus:outline-none"
-          >
-            <option value="" disabled>
-              Select a client…
-            </option>
-            {clients.map(c => (
-              <option key={c.client_id} value={c.client_id}>
-                {c.client_name}
-              </option>
-            ))}
-          </select>
-          <ChevronRight size={12} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rotate-90 text-fg-dim" />
-        </div>
-        <div className="relative max-w-md flex-1">
-          <select
-            value={selectedFunnelId ?? ''}
-            onChange={e => navigate({ client: funnelClientId ?? undefined, funnel: e.target.value })}
-            disabled={!funnelClientId || funnelsForClient.length === 0}
-            className="w-full cursor-pointer appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-8 text-sm text-fg focus:border-border-strong focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <option value="" disabled>
-              {funnelsForClient.length === 0 ? 'No funnels for this client' : 'Select a funnel…'}
-            </option>
-            {funnelsForClient.map(f => (
-              <option key={f.funnel_id} value={f.funnel_id}>
-                {f.funnel_name}
-              </option>
-            ))}
-          </select>
-          <ChevronRight size={12} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rotate-90 text-fg-dim" />
-        </div>
+        <Select
+          value={funnelClientId ?? ''}
+          onChange={cid => navigate(cid ? { client: cid } : {})}
+          options={[{ value: '', label: 'All clients' }, ...clientOptions.map(c => ({ value: c.client_id, label: c.client_name }))]}
+        />
+        <Select
+          value={selectedFunnelId ?? ''}
+          onChange={fid => navigate({ client: funnelClientId ?? undefined, funnel: fid || undefined })}
+          disabled={!funnelClientId}
+          options={[
+            { value: '', label: !funnelClientId ? 'All funnels' : `All ${funnelClientName ?? ''} funnels`.trim() },
+            ...clientFunnels.map(f => ({ value: f.id, label: f.name })),
+          ]}
+          wide
+        />
       </div>
 
-      {!funnel && (
-        <div className="rounded-xl border border-border bg-surface p-12 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-pink/10">
-            <FlaskConical size={20} className="text-pink" />
-          </div>
-          <div className="mb-1 text-sm text-fg">Pick a client and funnel to begin</div>
-          <div className="text-xs text-fg-muted">
-            We&apos;ll load the steps, variants, and per-variant deposit performance.
-          </div>
-        </div>
-      )}
-
-      {funnel && (
+      {detail ? (
         <>
-          <FunnelHeader
-            funnel={funnel}
-            clientName={funnelClientName ?? ''}
-            totals={totals}
-          />
-
-          <div className="flex items-center gap-1 border-b border-border">
-            {(['steps', 'stats'] as const).map(t => {
-              const active = tab === t;
-              return (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  className={cn(
-                    'relative px-4 py-2.5 text-sm font-medium transition-colors',
-                    active ? 'text-fg' : 'text-fg-muted hover:text-fg',
-                  )}
-                >
-                  {t === 'steps' ? 'Steps' : 'Stats'}
-                  {active && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-t bg-pink" />}
+          <div className="flex items-center justify-between gap-3">
+            <button onClick={() => navigate({ client: funnelClientId ?? undefined })} className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-pink">
+              <ArrowLeft size={14} /> Back to funnels
+            </button>
+            {selectedAdmin && (
+              <div className="flex items-center gap-2">
+                <button onClick={() => setEditing(selectedAdmin)} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg transition-colors hover:border-border-strong hover:text-pink">
+                  <Pencil size={13} /> Edit
                 </button>
-              );
-            })}
+                <StatusButton funnelId={selectedAdmin.id} to="archived" onDone={() => navigate({ client: funnelClientId ?? undefined })} />
+              </div>
+            )}
           </div>
-
-          {tab === 'steps' && <StepsTab funnel={funnel} />}
-          {tab === 'stats' && <StatsTab funnel={funnel} />}
+          <MetricsPanel metrics={detail} clientName={funnelClientName ?? ''} logoUrl={clientInfo.get(detail.client_id)?.logo_url ?? null} />
+        </>
+      ) : (
+        <>
+          <Overview metricsList={metricsList} clientInfo={clientInfo} groupByClient={!funnelClientId} onOpen={(cid, fid) => navigate({ client: cid, funnel: fid })} />
+          {archived.length > 0 && <ArchivedFunnels funnels={archived} clientInfo={clientInfo} />}
         </>
       )}
+
+      {editing && (
+        <FunnelFormModal
+          key={editing === 'new' ? 'new' : editing.id}
+          initial={editing === 'new' ? null : editing}
+          clients={clients}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </div>
   );
 }
 
-function FunnelHeader({
-  funnel,
-  clientName,
-  totals,
-}: {
-  funnel: FunnelBreakdown;
-  clientName: string;
-  totals: { deposits: number; revenue_gbp: number };
-}) {
-  const stat = (label: string, value: string, accent?: 'pink' | 'green') => (
-    <div>
-      <div className="mb-1 text-[9px] uppercase tracking-wider text-fg-dim">{label}</div>
-      <div
-        className={cn(
-          'text-lg font-bold tabular-nums',
-          accent === 'pink' ? 'text-pink' : accent === 'green' ? 'text-green' : 'text-fg',
-        )}
-      >
-        {value}
-      </div>
-    </div>
-  );
-
+function StatusButton({ funnelId, to, onDone }: { funnelId: string; to: 'active' | 'archived'; onDone?: () => void }) {
+  const [pending, start] = useTransition();
+  const archiving = to === 'archived';
+  const onClick = () => {
+    if (archiving && !window.confirm('Archive this funnel? It will be hidden from analytics but can be restored later.')) return;
+    start(async () => { await setFunnelStatusAction(funnelId, to); onDone?.(); });
+  };
   return (
-    <div className="rounded-xl border border-border bg-surface p-5">
-      <div className="mb-4 flex items-start justify-between">
-        <div>
-          <div className="mb-1 flex items-center gap-2">
-            <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-fg-muted">
-              {funnel.funnel_id.slice(-8)}
-            </span>
-            <span className="text-[10px] text-fg-muted">·</span>
-            <span className="text-[10px] text-fg-muted">{clientName}</span>
+    <button
+      onClick={onClick}
+      disabled={pending}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-muted transition-colors hover:border-border-strong hover:text-fg disabled:opacity-50"
+    >
+      {pending ? <Loader2 size={13} className="animate-spin" /> : archiving ? <Archive size={13} /> : <ArchiveRestore size={13} />}
+      {archiving ? 'Archive' : 'Restore'}
+    </button>
+  );
+}
+
+function ArchivedFunnels({ funnels, clientInfo }: { funnels: AdminFunnel[]; clientInfo: Map<string, ClientOption> }) {
+  return (
+    <div>
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-fg-muted">Archived ({funnels.length})</div>
+      <div className="overflow-hidden rounded-xl border border-border">
+        {funnels.map((f, i) => (
+          <div key={f.id} className={cn('flex items-center gap-3 bg-surface px-4 py-3', i < funnels.length - 1 && 'border-b border-border')}>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-fg-muted">{f.name}</div>
+              <div className="truncate text-xs text-fg-dim">{clientInfo.get(f.client_id)?.client_name ?? f.client_id}</div>
+            </div>
+            <StatusButton funnelId={f.id} to="active" />
           </div>
-          <div className="text-xl font-bold tracking-tight text-fg">{funnel.funnel_name}</div>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 border-t border-border pt-4 sm:grid-cols-3 lg:grid-cols-6">
-        {stat('LP Views', '—')}
-        {stat('Opt-Ins', '—')}
-        {stat('Opt-In Rate', '—', 'pink')}
-        {stat('Deposits Paid', formatNumber(totals.deposits))}
-        {stat('Full-Funnel', '—', 'green')}
-        {stat('Revenue', formatGBP(totals.revenue_gbp, { decimals: 0 }), 'green')}
+        ))}
       </div>
     </div>
   );
 }
 
-function StepsTab({ funnel }: { funnel: FunnelBreakdown }) {
-  // Default to the step with the most deposits — that's where the real data lives.
-  // (LP steps will always show 0 because deposits are attributed to the deposit page.)
-  const defaultStepId = useMemo(() => {
-    const withDeposits = [...funnel.steps]
-      .filter(s => s.step_deposits > 0)
-      .sort((a, b) => b.step_deposits - a.step_deposits)[0];
-    return withDeposits?.step_id ?? funnel.steps[0]?.step_id ?? '';
-  }, [funnel.steps]);
-  const [activeStepId, setActiveStepId] = useState<string>(defaultStepId);
-  const activeStep = funnel.steps.find(s => s.step_id === activeStepId) ?? funnel.steps[0];
-  if (!activeStep) {
+// ─── Overview (all funnels, grouped by client) ───────────────────────────────
+
+function Overview({
+  metricsList, clientInfo, groupByClient, onOpen,
+}: {
+  metricsList: FunnelMetrics[];
+  clientInfo: Map<string, ClientOption>;
+  groupByClient: boolean;
+  onOpen: (clientId: string, funnelId: string) => void;
+}) {
+  if (metricsList.length === 0) {
     return (
-      <div className="rounded-xl border border-border bg-surface p-8 text-center text-sm text-fg-muted">
-        No steps in this funnel yet.
+      <div className="rounded-2xl border border-border bg-surface p-12 text-center">
+        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-pink/10"><FlaskConical size={20} className="text-pink" /></div>
+        <div className="mb-1 text-sm text-fg">No funnels to show</div>
+        <div className="text-xs text-fg-muted">Use “Manage funnels” to add one.</div>
       </div>
     );
   }
 
-  return (
-    <div className="grid grid-cols-12 gap-6">
-      <div className="col-span-12 lg:col-span-3">
-        <StepNavigator
-          steps={funnel.steps}
-          activeStepId={activeStep.step_id}
-          onSelect={setActiveStepId}
-        />
-      </div>
-      <div className="col-span-12 space-y-4 lg:col-span-9">
-        <div className="rounded-xl border border-border bg-surface p-5">
-          <div className="text-sm font-semibold text-fg">{activeStep.step_name}</div>
-          <div className="mt-0.5 text-xs text-fg-muted">
-            {activeStep.pages.length === 1
-              ? 'Single page · no split test running'
-              : activeStep.step_deposits > 0
-                ? `${activeStep.pages.length}-way split test · ${formatNumber(activeStep.step_deposits)} deposits across variants`
-                : `${activeStep.pages.length}-way split test · deposits aren't attributed at this step (only the deposit page captures payments)`}
-          </div>
-        </div>
+  // Group by client, preserving name order.
+  const groups = new Map<string, FunnelMetrics[]>();
+  for (const m of metricsList) {
+    const list = groups.get(m.client_id) ?? [];
+    list.push(m);
+    groups.set(m.client_id, list);
+  }
+  const ordered = [...groups.entries()].sort((a, b) => {
+    const an = clientInfo.get(a[0])?.client_name ?? a[0];
+    const bn = clientInfo.get(b[0])?.client_name ?? b[0];
+    return an.localeCompare(bn);
+  });
 
-        {activeStep.pages.length === 1 ? (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <VariantCard variant={activeStep.pages[0]} isControl isWinner={false} />
-            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface-2 p-6 text-center">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-pink/15">
-                <FlaskConical size={18} className="text-pink" />
+  return (
+    <div className="space-y-8">
+      {ordered.map(([clientId, list]) => {
+        const info = clientInfo.get(clientId);
+        return (
+          <div key={clientId}>
+            {groupByClient && (
+              <div className="mb-3 flex items-center gap-2.5">
+                {info?.logo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={info.logo_url} alt="" className="h-7 w-7 rounded-md border border-border object-cover" />
+                ) : (
+                  <div className="flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold text-fg-muted" style={{ background: clientColor(clientId) }}>
+                    {clientInitials(info?.client_name ?? '?')}
+                  </div>
+                )}
+                <span className="text-sm font-semibold text-fg">{info?.client_name ?? clientId}</span>
+                <span className="text-xs text-fg-dim">· {list.length} funnel{list.length === 1 ? '' : 's'}</span>
               </div>
-              <div className="mb-1 text-sm font-medium text-fg">Start a split test</div>
-              <div className="mb-4 max-w-xs text-xs text-fg-muted">
-                Test a new variant of this page against the control to optimise the deposit rate.
-              </div>
-              <button
-                disabled
-                className="cursor-not-allowed rounded-lg bg-pink px-4 py-2 text-xs font-medium text-black opacity-60"
-                title="LP builder integration coming with Vercel-hosted LPs"
-              >
-                Create variation
-              </button>
+            )}
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {list.map(m => <FunnelSummaryCard key={m.funnel_id} m={m} client={info} onClick={() => onOpen(clientId, m.funnel_id)} />)}
             </div>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {(() => {
-              const winner = [...activeStep.pages].sort((a, b) => b.deposits - a.deposits)[0];
-              return activeStep.pages.map((p, i) => (
-                <VariantCard
-                  key={p.page_id}
-                  variant={p}
-                  isControl={i === 0}
-                  isWinner={p.page_id === winner.page_id && p.deposits > 0}
-                />
-              ));
-            })()}
+        );
+      })}
+    </div>
+  );
+}
+
+function FunnelSummaryCard({ m, client, onClick }: { m: FunnelMetrics; client?: ClientOption; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="group flex flex-col rounded-2xl border border-border bg-surface p-5 text-left transition-colors hover:border-border-strong">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2.5">
+          {client?.logo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={client.logo_url} alt="" className="h-8 w-8 shrink-0 rounded-lg border border-border object-cover" />
+          ) : (
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[10px] font-bold text-fg-muted" style={{ background: clientColor(m.client_id) }}>
+              {clientInitials(client?.client_name ?? '?')}
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-fg group-hover:text-pink">{m.funnel_name}</div>
+            <div className="mt-0.5 text-[11px] text-fg-dim">
+              {m.meta_campaign_count} campaign{m.meta_campaign_count === 1 ? '' : 's'} · {m.pages.length} page{m.pages.length === 1 ? '' : 's'}
+            </div>
           </div>
+        </div>
+        <ChevronRight size={16} className="mt-0.5 shrink-0 text-fg-dim transition-transform group-hover:translate-x-0.5 group-hover:text-pink" />
+      </div>
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        <Mini label="LP Views" value={m.lp_views == null ? '—' : formatNumber(m.lp_views)} />
+        <Mini label="Opt-ins" value={formatNumber(m.optins)} />
+        <Mini label="Deposits" value={formatNumber(m.deposits)} accent />
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 border-t border-border/60 pt-3">
+        <div>
+          <div className="text-[9px] font-semibold uppercase tracking-wider text-fg-muted">Opt-in rate</div>
+          <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-fg">{formatPercent(m.optin_rate_pct)}</div>
+        </div>
+        <div>
+          <div className="text-[9px] font-semibold uppercase tracking-wider text-fg-muted">Deposit rate</div>
+          <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-pink">{formatPercent(m.deposit_rate_pct)}</div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function Mini({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="rounded-lg bg-surface-2 px-2.5 py-2">
+      <div className="text-[9px] font-semibold uppercase tracking-wider text-fg-muted">{label}</div>
+      <div className={cn('mt-0.5 font-mono text-lg font-bold tabular-nums', accent ? 'text-pink' : 'text-fg')}>{value}</div>
+    </div>
+  );
+}
+
+// ─── Detail (single funnel) ──────────────────────────────────────────────────
+
+function MetricsPanel({ metrics: m, clientName, logoUrl }: { metrics: FunnelMetrics; clientName: string; logoUrl: string | null }) {
+  const top = m.lp_views && m.lp_views > 0 ? m.lp_views : Math.max(m.optins, m.deposits, 1);
+  const share = (v: number | null) => (v == null ? null : Math.round((v / top) * 1000) / 10);
+
+  const stages = [
+    { key: 'lpv', label: 'LP Views', icon: Eye, value: m.lp_views, tags: m.meta_campaign_count ? `${m.meta_campaign_count} campaign${m.meta_campaign_count === 1 ? '' : 's'}` : 'No campaigns mapped' },
+    { key: 'opt', label: 'Opt-ins', icon: MousePointerClick, value: m.optins, tags: m.optin_tags.length ? m.optin_tags.join(' · ') : 'No opt-in tags' },
+    { key: 'dep', label: 'Deposits', icon: Landmark, value: m.deposits, tags: m.deposit_tags.length ? m.deposit_tags.join(' · ') : 'No deposit tags' },
+  ] as const;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-4 rounded-2xl border border-border bg-gradient-to-br from-surface-2/50 to-surface p-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3.5">
+          {logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={logoUrl} alt="" className="h-12 w-12 rounded-2xl border border-border object-cover" />
+          ) : (
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl text-sm font-bold text-fg-muted" style={{ background: clientColor(m.client_id) }}>
+              {clientInitials(clientName || '?')}
+            </div>
+          )}
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight text-fg">{m.funnel_name}</h2>
+            <p className="text-xs text-fg-muted">{clientName}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-5 sm:gap-7">
+          <Headline label="Deposits" value={m.deposits == null ? '—' : formatNumber(m.deposits)} />
+          <div className="h-10 w-px bg-border" />
+          <Headline label="Opt-in rate" value={formatPercent(m.optin_rate_pct)} />
+          <div className="h-10 w-px bg-border" />
+          <Headline label="Deposit rate" value={formatPercent(m.deposit_rate_pct)} accent />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-surface p-6">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
+          {stages.map((s, i) => (
+            <Fragment key={s.key}>
+              <StageCard
+                label={s.label}
+                icon={s.icon}
+                value={s.value}
+                share={share(s.value)}
+                widthPct={s.value == null ? 0 : Math.max(4, share(s.value) ?? 0)}
+                tags={s.tags}
+              />
+              {i < stages.length - 1 && (
+                <StageConnector pct={i === 0 ? m.optin_rate_pct : m.deposit_rate_pct} dropped={s.value != null && stages[i + 1].value != null ? s.value - (stages[i + 1].value as number) : null} />
+              )}
+            </Fragment>
+          ))}
+        </div>
+      </div>
+
+      {m.lp_views == null && (
+        <div className="rounded-xl border border-yellow/30 bg-yellow/10 px-4 py-2.5 text-xs text-yellow">
+          No Meta campaigns are mapped to this funnel, so LP views (and the rates based on them) can’t be calculated. Add campaigns under “Manage funnels”.
+        </div>
+      )}
+
+      {m.pages.length > 0 && (
+        <div className="rounded-2xl border border-border bg-surface p-6">
+          <div className="mb-4 text-sm font-semibold text-fg">Funnel pages</div>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
+            {m.pages.map((p, i) => (
+              <Fragment key={i}>
+                <PageCard index={i} page={p} />
+                {i < m.pages.length - 1 && <PageArrow />}
+              </Fragment>
+            ))}
+          </div>
+          <div className="mt-5 flex items-start gap-3 rounded-xl border border-yellow/30 bg-gradient-to-br from-yellow/10 to-transparent p-4">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-yellow/15 ring-1 ring-yellow/20">
+              <AlertTriangle size={16} className="text-yellow" />
+            </div>
+            <div className="text-xs leading-relaxed">
+              <div className="font-semibold text-yellow">Heads up — opening pages fires their pixels</div>
+              <p className="mt-0.5 text-fg-muted">
+                Loading a page (especially the <span className="font-medium text-fg">Thank You page</span>) can trigger its Meta / GA conversion pixels and pollute attribution. Preview conversion pages in a <span className="font-medium text-fg">private / incognito window</span>.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Headline({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="text-right sm:text-left">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">{label}</div>
+      <div className={cn('mt-0.5 font-mono text-3xl font-bold tabular-nums', accent ? 'text-pink' : 'text-fg')}>{value}</div>
+    </div>
+  );
+}
+
+function StageCard({
+  label, icon: Icon, value, share, widthPct, tags,
+}: {
+  label: string;
+  icon: typeof Eye;
+  value: number | null;
+  share: number | null;
+  widthPct: number;
+  tags: string;
+}) {
+  return (
+    <div className="flex flex-1 flex-col rounded-xl border border-border bg-surface-2/30 p-5">
+      <div className="flex items-center gap-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2"><Icon size={15} className="text-pink" /></div>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">{label}</span>
+      </div>
+      <div className="mt-3 flex items-baseline gap-2">
+        <span className="font-mono text-3xl font-bold tabular-nums text-fg">{value == null ? '—' : formatNumber(value)}</span>
+        {share != null && <span className="text-xs tabular-nums text-fg-dim">{share}%</span>}
+      </div>
+      <div className="mt-1 truncate text-[11px] text-fg-dim" title={tags}>{tags}</div>
+      <div className="mt-auto pt-4">
+        <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
+          <div className="h-full rounded-full bg-gradient-to-r from-pink/70 to-pink transition-[width] duration-500" style={{ width: `${widthPct}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StageConnector({ pct, dropped }: { pct: number | null; dropped: number | null }) {
+  return (
+    <div className="flex shrink-0 items-center justify-center gap-2 lg:w-24 lg:flex-col lg:gap-1">
+      <ArrowDown size={16} className="text-fg-dim lg:hidden" />
+      <ArrowRight size={18} className="hidden text-fg-dim lg:block" />
+      <div className="text-center">
+        <div className="text-sm font-bold text-pink">{pct == null ? '—' : `${pct}%`}</div>
+        <div className="text-[9px] uppercase tracking-wide text-fg-dim">continue</div>
+        {dropped != null && dropped > 0 && <div className="text-[9px] text-fg-dim">−{formatNumber(dropped)}</div>}
+      </div>
+    </div>
+  );
+}
+
+function PageCard({ index, page }: { index: number; page: FunnelPageLink }) {
+  const url = page.url ? (page.url.startsWith('http') ? page.url : `https://${page.url}`) : null;
+  const display = url ? url.replace(/^https?:\/\//, '').replace(/\/$/, '') : null;
+  return (
+    <div className="flex flex-1 flex-col rounded-xl border border-border bg-surface-2/30 p-4">
+      <div className="flex items-center gap-2">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-xs font-semibold text-fg-muted">{index + 1}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{page.name || 'Untitled page'}</span>
+      </div>
+      {display && <div className="mt-2 truncate text-[11px] text-fg-dim" title={display}>{display}</div>}
+      <div className="mt-auto pt-3">
+        {url ? (
+          <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-semibold text-pink transition-colors hover:text-pink-soft">
+            Open <ExternalLink size={12} />
+          </a>
+        ) : (
+          <span className="text-[11px] text-fg-dim">No link</span>
         )}
       </div>
     </div>
   );
 }
 
-function StepNavigator({
-  steps,
-  activeStepId,
-  onSelect,
-}: {
-  steps: FunnelStep[];
-  activeStepId: string;
-  onSelect: (id: string) => void;
-}) {
+function PageArrow() {
   return (
-    <div className="sticky top-24 rounded-xl border border-border bg-surface p-3">
-      <div className="px-2 py-2 text-[10px] font-semibold uppercase tracking-widest text-fg-dim">
-        Funnel Steps
-      </div>
-      <div className="space-y-0.5">
-        {steps.map((step, i) => {
-          const isActive = step.step_id === activeStepId;
-          return (
-            <button
-              key={step.step_id}
-              onClick={() => onSelect(step.step_id)}
-              className={cn(
-                'group w-full rounded-lg px-3 py-2.5 text-left transition-colors',
-                isActive ? 'bg-surface-2' : 'hover:bg-surface-2/50',
-              )}
-            >
-              <div className="flex items-center gap-2.5">
-                <div
-                  className={cn(
-                    'flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-bold',
-                    isActive ? 'bg-pink text-black' : 'bg-surface-2 text-fg-muted',
-                  )}
-                >
-                  {i + 1}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className={cn('truncate text-xs font-medium', isActive ? 'text-fg' : 'text-fg-muted')}>
-                    {step.step_name}
-                  </div>
-                  <div className="mt-0.5 text-[9px] text-fg-dim">
-                    {step.pages.length} {step.pages.length === 1 ? 'variant' : 'variants'}
-                    {step.step_deposits > 0 && ` · ${step.step_deposits} deposits`}
-                  </div>
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
+    <div className="flex shrink-0 items-center justify-center lg:w-8">
+      <ArrowDown size={16} className="text-fg-dim lg:hidden" />
+      <ArrowRight size={16} className="hidden text-fg-dim lg:block" />
     </div>
   );
 }
 
-function VariantCard({
-  variant,
-  isControl,
-  isWinner,
+function Select({
+  value, onChange, options, disabled, wide,
 }: {
-  variant: FunnelPage;
-  isControl: boolean;
-  isWinner: boolean;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  disabled?: boolean;
+  wide?: boolean;
 }) {
-  const urlLabel = variant.page_url
-    ? variant.page_url.replace(/^https?:\/\//, '')
-    : '(no URL)';
   return (
-    <div
-      className={cn(
-        'overflow-hidden rounded-xl border bg-surface-2 transition-colors',
-        isWinner ? 'border-green/40' : 'border-border',
-      )}
-    >
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              'rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-              isControl ? 'bg-surface text-fg-muted' : 'bg-pink text-black',
-            )}
-          >
-            {isControl ? 'Control' : 'Variation'}
-          </span>
-          {isWinner && (
-            <span className="rounded bg-green/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-green">
-              Leading
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden border-b border-border bg-gradient-to-br from-surface to-surface-2">
-        <div className="absolute inset-x-0 top-0 flex h-6 items-center gap-1 border-b border-border bg-bg/80 px-2">
-          <span className="h-1.5 w-1.5 rounded-full bg-fg-dim" />
-          <span className="h-1.5 w-1.5 rounded-full bg-fg-dim" />
-          <span className="h-1.5 w-1.5 rounded-full bg-fg-dim" />
-          <span className="ml-2 truncate text-[8px] text-fg-dim">{urlLabel}</span>
-        </div>
-        <div className="mt-4 w-3/4 space-y-2">
-          <div className="mx-auto h-2 w-2/3 rounded bg-surface" />
-          <div className="h-2 w-full rounded bg-surface" />
-          <div className="mx-auto h-2 w-5/6 rounded bg-surface" />
-          <div
-            className="mx-auto mt-3 h-8 w-1/2 rounded"
-            style={{ background: PINK_DIM, border: `1px solid ${PINK_BORDER}` }}
-          />
-        </div>
-      </div>
-
-      <div className="space-y-3 p-4">
-        <div>
-          <div className="truncate text-sm font-semibold text-fg">{variant.page_name}</div>
-          <div className="mt-0.5 text-[10px] text-fg-muted">Hosted on GHL</div>
-        </div>
-        <div className="grid grid-cols-3 gap-2 border-t border-border pt-2">
-          <div>
-            <div className="mb-0.5 text-[9px] uppercase tracking-wider text-fg-dim">Views</div>
-            <div className="text-sm font-bold tabular-nums text-fg-dim">—</div>
-          </div>
-          <div>
-            <div className="mb-0.5 text-[9px] uppercase tracking-wider text-fg-dim">Opt-Ins</div>
-            <div className="text-sm font-bold tabular-nums text-fg-dim">—</div>
-          </div>
-          <div>
-            <div className="mb-0.5 text-[9px] uppercase tracking-wider text-fg-dim">Deposits</div>
-            <div className={cn('text-sm font-bold tabular-nums', isWinner ? 'text-green' : 'text-fg')}>
-              {variant.deposits > 0 ? formatNumber(variant.deposits) : '—'}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center justify-between border-t border-border pt-2">
-          <div className="text-[10px] text-fg-muted">
-            Revenue
-            <span className="ml-1 font-mono text-green">
-              {variant.amount_gbp > 0 ? formatGBP(variant.amount_gbp, { decimals: 0 }) : '—'}
-            </span>
-          </div>
-          {variant.page_url ? (
-            <a
-              href={variant.page_url.startsWith('http') ? variant.page_url : `https://${variant.page_url}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-[10px] font-medium text-fg-muted transition-colors hover:border-border-strong hover:text-fg"
-            >
-              View page
-              <ArrowUpRight size={10} />
-            </a>
-          ) : (
-            <span className="text-[10px] text-fg-dim">no url</span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StatsTab({ funnel }: { funnel: FunnelBreakdown }) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = {};
-    for (const s of funnel.steps) init[s.step_id] = true;
-    return init;
-  });
-  const toggle = (id: string) => setExpanded(e => ({ ...e, [id]: !e[id] }));
-
-  return (
-    <div className="space-y-4">
-      <div className="overflow-hidden rounded-xl border border-border bg-surface">
-        <div className="flex items-center justify-between border-b border-border p-5">
-          <div>
-            <div className="text-sm font-semibold text-fg">Per-step performance</div>
-            <div className="mt-0.5 text-xs text-fg-muted">
-              Deposits and revenue for each step and its variants. Page views + opt-ins land when
-              LPs move to our hosting.
-            </div>
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-border">
-                <th className="w-[280px] px-5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-                  Step / Variant
-                </th>
-                <th className="border-l border-border px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-                  Views
-                </th>
-                <th className="border-l border-border px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-                  Opt-Ins
-                </th>
-                <th className="border-l border-border px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-                  Deposits
-                </th>
-                <th className="border-l border-border px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-                  Revenue
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {funnel.steps.map((step, i) => {
-                const isExpanded = expanded[step.step_id] ?? true;
-                return (
-                  <Fragment key={step.step_id}>
-                    <tr className="border-b border-border bg-surface-2/40">
-                      <td className="px-5 py-3">
-                        <button onClick={() => toggle(step.step_id)} className="flex items-center gap-2 text-left">
-                          <ChevronRight
-                            size={14}
-                            className={cn('text-fg-muted transition-transform', isExpanded && 'rotate-90')}
-                          />
-                          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-2 text-[10px] font-bold text-fg-muted">
-                            {i + 1}
-                          </span>
-                          <span className="text-sm font-semibold text-fg">{step.step_name}</span>
-                        </button>
-                      </td>
-                      <td className="border-l border-border px-3 py-3 text-right text-sm text-fg-dim">—</td>
-                      <td className="border-l border-border px-3 py-3 text-right text-sm text-fg-dim">—</td>
-                      <td className="border-l border-border px-3 py-3 text-right font-mono text-sm tabular-nums text-fg">
-                        {step.step_deposits > 0 ? formatNumber(step.step_deposits) : '—'}
-                      </td>
-                      <td className="border-l border-border px-3 py-3 text-right font-mono text-sm tabular-nums text-green">
-                        {step.step_amount_gbp > 0 ? formatGBP(step.step_amount_gbp, { decimals: 0 }) : '—'}
-                      </td>
-                    </tr>
-                    {isExpanded &&
-                      step.pages.map((p, j) => (
-                        <tr key={p.page_id} className="border-b border-border/50 transition-colors hover:bg-surface-2/30">
-                          <td className="py-2.5 pl-14 pr-5">
-                            <div className="flex items-center gap-2">
-                              <span
-                                className={cn(
-                                  'rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider',
-                                  j === 0 ? 'bg-surface-2 text-fg-muted' : 'bg-pink text-black',
-                                )}
-                              >
-                                {String.fromCharCode(65 + j)}
-                              </span>
-                              <span className="text-xs text-fg">{p.page_name}</span>
-                            </div>
-                          </td>
-                          <td className="border-l border-border px-3 py-2.5 text-right text-xs text-fg-dim">—</td>
-                          <td className="border-l border-border px-3 py-2.5 text-right text-xs text-fg-dim">—</td>
-                          <td className="border-l border-border px-3 py-2.5 text-right font-mono text-xs tabular-nums text-fg-muted">
-                            {p.deposits > 0 ? formatNumber(p.deposits) : '—'}
-                          </td>
-                          <td className="border-l border-border px-3 py-2.5 text-right font-mono text-xs tabular-nums text-green/80">
-                            {p.amount_gbp > 0 ? formatGBP(p.amount_gbp, { decimals: 0 }) : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-border bg-surface p-5">
-        <div className="flex items-start gap-2">
-          <Sparkles size={14} className="mt-0.5 shrink-0 text-pink" />
-          <div className="text-xs leading-relaxed text-fg-muted">
-            <span className="text-fg">Heads up:</span> opt-in rate, deposit rate, and full-funnel
-            attribution per variant all need page-view + form-submit events from the LP itself.
-            GHL&apos;s Private Integration Tokens don&apos;t expose page statistics — those numbers
-            light up once we move LPs to our own Vercel hosting (or Kyle gets us OAuth on GHL).
-          </div>
-        </div>
-      </div>
+    <div className={cn('relative', wide && 'max-w-md flex-1')}>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        disabled={disabled}
+        className="w-full cursor-pointer appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-8 text-sm text-fg focus:border-border-strong focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <ChevronRight size={12} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rotate-90 text-fg-dim" />
     </div>
   );
 }
