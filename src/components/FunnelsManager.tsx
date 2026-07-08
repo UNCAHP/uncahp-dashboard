@@ -58,10 +58,6 @@ export function FunnelFormModal({
 
   const toggleCampaign = (id: string) =>
     setCampaignIds(cur => (cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]));
-  const toggleSource = (s: string) =>
-    setDepositSources(cur => (cur.includes(s) ? cur.filter(x => x !== s) : [...cur, s]));
-  const toggleSetterSource = (s: string) =>
-    setSetterSources(cur => (cur.includes(s) ? cur.filter(x => x !== s) : [...cur, s]));
   const setPage = (i: number, patch: Partial<FunnelPageLink>) =>
     setPages(cur => cur.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
   const addPage = () => setPages(cur => [...cur, { name: '', url: '' }]);
@@ -95,44 +91,12 @@ export function FunnelFormModal({
           <TagMultiSelect value={optinTags} onChange={setOptinTags} options={tags} placeholder="e.g. lead complete" disabled={!clientId} />
         </Field>
 
-        <Field label="Deposit source(s)" hint="Payments from these GHL transaction sources count as this funnel's deposits">
-          <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border bg-bg p-2">
-            {!clientId ? (
-              <div className="px-1 py-2 text-xs text-fg-dim">Pick a client first.</div>
-            ) : loadingData ? (
-              <div className="flex items-center gap-2 px-1 py-2 text-xs text-fg-dim"><Loader2 size={13} className="animate-spin" /> Loading payment sources…</div>
-            ) : sources.length === 0 ? (
-              <div className="px-1 py-2 text-xs text-fg-dim">No payment sources found for this client.</div>
-            ) : (
-              sources.map(s => (
-                <label key={s.source} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs text-fg hover:bg-surface-2">
-                  <input type="checkbox" checked={depositSources.includes(s.source)} onChange={() => toggleSource(s.source)} className="accent-pink" />
-                  <span className="truncate">{s.source}</span>
-                  <span className="ml-auto shrink-0 text-[9px] text-fg-dim">{s.count}</span>
-                </label>
-              ))
-            )}
-          </div>
+        <Field label="Deposit source(s)" hint="Payments from these GHL payment links count as this funnel's deposits. Links with no payments yet won't appear below — add them by name.">
+          <SourceMultiSelect value={depositSources} onChange={setDepositSources} options={sources} clientId={clientId} loading={loadingData} />
         </Field>
 
         <Field label="Setter / phone payment source(s)" hint="Shared payment links your setters use over the phone. A payment here only counts as a deposit when the contact has ALL of this funnel's opt-in tags — proving the lead came from this funnel (Meta lead-form leads without those tags are excluded).">
-          <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border bg-bg p-2">
-            {!clientId ? (
-              <div className="px-1 py-2 text-xs text-fg-dim">Pick a client first.</div>
-            ) : loadingData ? (
-              <div className="flex items-center gap-2 px-1 py-2 text-xs text-fg-dim"><Loader2 size={13} className="animate-spin" /> Loading payment sources…</div>
-            ) : sources.length === 0 ? (
-              <div className="px-1 py-2 text-xs text-fg-dim">No payment sources found for this client.</div>
-            ) : (
-              sources.map(s => (
-                <label key={s.source} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs text-fg hover:bg-surface-2">
-                  <input type="checkbox" checked={setterSources.includes(s.source)} onChange={() => toggleSetterSource(s.source)} className="accent-pink" />
-                  <span className="truncate">{s.source}</span>
-                  <span className="ml-auto shrink-0 text-[9px] text-fg-dim">{s.count}</span>
-                </label>
-              ))
-            )}
-          </div>
+          <SourceMultiSelect value={setterSources} onChange={setSetterSources} options={sources} clientId={clientId} loading={loadingData} />
         </Field>
 
         <Field label="Meta campaigns (LP views)" hint="Which campaigns feed this funnel's landing-page views">
@@ -233,6 +197,73 @@ function TagMultiSelect({
           <option key={o.tag} value={o.tag}>{`${o.tag} (${o.count})`}</option>
         ))}
       </datalist>
+    </div>
+  );
+}
+
+// Payment-source picker. Options come from transaction history, so a payment link with
+// no payments yet won't be listed — the free-text input lets you add it by exact name.
+function SourceMultiSelect({
+  value, onChange, options, clientId, loading,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  options: SourceOption[];
+  clientId: string;
+  loading: boolean;
+}) {
+  const [input, setInput] = useState('');
+  const known = new Set(options.map(o => o.source));
+  const extras = value.filter(v => !known.has(v)); // manually added (not in txn history)
+
+  const toggle = (s: string) =>
+    onChange(value.includes(s) ? value.filter(x => x !== s) : [...value, s]);
+  const add = (raw: string) => {
+    const s = raw.trim();
+    if (s && !value.includes(s)) onChange([...value, s]);
+    setInput('');
+  };
+
+  return (
+    <div className="rounded-lg border border-border bg-bg p-2">
+      <div className="max-h-40 space-y-1 overflow-y-auto">
+        {!clientId ? (
+          <div className="px-1 py-2 text-xs text-fg-dim">Pick a client first.</div>
+        ) : loading ? (
+          <div className="flex items-center gap-2 px-1 py-2 text-xs text-fg-dim"><Loader2 size={13} className="animate-spin" /> Loading payment sources…</div>
+        ) : options.length === 0 && extras.length === 0 ? (
+          <div className="px-1 py-2 text-xs text-fg-dim">No payment sources found yet — add one by name below.</div>
+        ) : (
+          <>
+            {extras.map(s => (
+              <label key={s} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs text-fg hover:bg-surface-2">
+                <input type="checkbox" checked onChange={() => toggle(s)} className="accent-pink" />
+                <span className="truncate">{s}</span>
+                <span className="ml-auto shrink-0 rounded bg-pink/15 px-1 text-[8px] font-medium uppercase tracking-wide text-pink">manual</span>
+              </label>
+            ))}
+            {options.map(s => (
+              <label key={s.source} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs text-fg hover:bg-surface-2">
+                <input type="checkbox" checked={value.includes(s.source)} onChange={() => toggle(s.source)} className="accent-pink" />
+                <span className="truncate">{s.source}</span>
+                <span className="ml-auto shrink-0 text-[9px] text-fg-dim">{s.count}</span>
+              </label>
+            ))}
+          </>
+        )}
+      </div>
+      {clientId && !loading && (
+        <div className="mt-1.5 border-t border-border pt-1.5">
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(input); } }}
+            onBlur={() => add(input)}
+            placeholder="Add a source not listed (exact GHL payment-link name)…"
+            className="w-full bg-transparent px-1 text-xs text-fg placeholder:text-fg-dim focus:outline-none"
+          />
+        </div>
+      )}
     </div>
   );
 }
