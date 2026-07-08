@@ -723,20 +723,6 @@ export type FunnelMetrics = {
   meta_campaign_count: number;
 };
 
-// Fetch lowercased tag lists for a set of GHL contact ids (by source_id), chunked to
-// keep the `in(...)` query URLs within limits.
-async function tagsForContacts(ids: string[]): Promise<Map<string, string[]>> {
-  const out = new Map<string, string[]>();
-  for (let i = 0; i < ids.length; i += 100) {
-    const chunk = ids.slice(i, i + 100);
-    const { data } = await supabase.from('ghl_contacts').select('source_id, tags').in('source_id', chunk);
-    for (const c of data ?? []) {
-      out.set(c.source_id, Array.isArray(c.tags) ? c.tags.map((t: unknown) => String(t).toLowerCase()) : []);
-    }
-  }
-  return out;
-}
-
 export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): Promise<FunnelMetrics> {
   // LP views from Meta landing_page_view for the mapped campaigns.
   let lp_views: number | null = null;
@@ -753,31 +739,26 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     lp_views = rows.reduce((s, r) => s + extractAction(r.actions, 'landing_page_view'), 0);
   }
 
-  // Opt-ins: contacts carrying ALL the funnel's opt-in tags (matches GHL's "Tag Is [...]"
-  // smart-list filter — deduplicated per contact, so repeat enquiries count once, unlike
-  // Meta pixel leads). Dated by the GHL opportunity being created OR last moved/updated in
-  // range — so an older contact whose opportunity re-enters the funnel this period is still
-  // counted, not just brand-new opportunities.
+  // Opt-ins: contacts carrying ALL the funnel's opt-in tags, CREATED in range. Matches a
+  // GHL "Tag Is [...] AND Created Between [...]" smart list exactly. Deduplicated per
+  // contact (a lead who enquires multiple times counts once). Net-new only — a contact
+  // created in an earlier period is not re-counted here even if it re-engages.
   let optins = 0;
   if (funnel.optin_tags.length > 0) {
     const need = funnel.optin_tags.map(t => t.toLowerCase());
-    const from = `${range.since}T00:00:00Z`;
-    const to = `${range.until}T23:59:59Z`;
-    type OppRow = { contact_id: string | null };
-    const opps = await fetchAll<OppRow>(() =>
+    type ContactRow = { tags: unknown };
+    const contacts = await fetchAll<ContactRow>(() =>
       supabase
-        .from('ghl_opportunities')
-        .select('contact_id')
+        .from('ghl_contacts')
+        .select('tags')
         .eq('location_id', funnel.client_id)
-        .or(`and(created_at.gte.${from},created_at.lte.${to}),and(updated_at.gte.${from},updated_at.lte.${to})`),
+        .gte('date_added', `${range.since}T00:00:00Z`)
+        .lte('date_added', `${range.until}T23:59:59Z`),
     );
-    const ids = [...new Set(opps.map(o => o.contact_id).filter((x): x is string => !!x))];
-    const tags = await tagsForContacts(ids);
-    const counted = new Set<string>();
-    for (const id of ids) {
-      if (need.every(w => (tags.get(id) ?? []).includes(w))) counted.add(id);
+    for (const c of contacts) {
+      const t = Array.isArray(c.tags) ? c.tags.map(x => String(x).toLowerCase()) : [];
+      if (need.every(w => t.includes(w))) optins++;
     }
-    optins = counted.size;
   }
 
   // Deposits: succeeded transactions in range whose SOURCE (GHL's payment "Source",
