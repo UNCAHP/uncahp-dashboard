@@ -14,6 +14,7 @@ type Props = {
   clients: ClientOption[];
   adminFunnels: AdminFunnel[];
   metricsList: FunnelMetrics[];
+  funnelStatus: 'active' | 'archived';
   funnelClientId: string | null;
   funnelClientName: string | null;
   selectedFunnelId: string | null;
@@ -22,26 +23,27 @@ type Props = {
 };
 
 export function FunnelAnalyticsView({
-  clients, adminFunnels, metricsList, funnelClientId, funnelClientName, selectedFunnelId, since, until,
+  clients, adminFunnels, metricsList, funnelStatus, funnelClientId, funnelClientName, selectedFunnelId, since, until,
 }: Props) {
   const router = useRouter();
   const [editing, setEditing] = useState<AdminFunnel | 'new' | null>(null);
 
-  const active = adminFunnels.filter(f => f.status === 'active');
-  const clientIdsWithFunnels = new Set(active.map(f => f.client_id));
+  const statusFunnels = adminFunnels.filter(f => f.status === funnelStatus);
+  const clientIdsWithFunnels = new Set(statusFunnels.map(f => f.client_id));
   const clientOptions = clients.filter(c => clientIdsWithFunnels.has(c.client_id));
-  const clientFunnels = funnelClientId ? active.filter(f => f.client_id === funnelClientId) : [];
+  const clientFunnels = funnelClientId ? statusFunnels.filter(f => f.client_id === funnelClientId) : [];
   const clientInfo = new Map(clients.map(c => [c.client_id, c]));
-  const selectedAdmin = selectedFunnelId ? active.find(f => f.id === selectedFunnelId) ?? null : null;
-  const archived = adminFunnels.filter(f => f.status === 'archived' && (!funnelClientId || f.client_id === funnelClientId));
+  const selectedAdmin = selectedFunnelId ? adminFunnels.find(f => f.id === selectedFunnelId) ?? null : null;
 
-  const navigate = (next: { client?: string; funnel?: string }) => {
+  const navigate = (next: { client?: string; funnel?: string; fstatus?: 'active' | 'archived' }) => {
     const params = new URLSearchParams();
     params.set('view', 'funnel');
     params.set('since', since);
     params.set('until', until);
     if (next.client) params.set('client', next.client);
     if (next.funnel) params.set('funnel', next.funnel);
+    const fs = next.fstatus ?? funnelStatus;
+    if (fs === 'archived') params.set('fstatus', 'archived');
     router.push(`/?${params.toString()}`);
   };
 
@@ -66,6 +68,17 @@ export function FunnelAnalyticsView({
 
       {/* Selectors */}
       <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+          {(['active', 'archived'] as const).map(s => (
+            <button
+              key={s}
+              onClick={() => navigate({ client: funnelClientId ?? undefined, fstatus: s })}
+              className={cn('rounded-md px-3 py-1.5 text-xs font-medium transition-colors', funnelStatus === s ? 'bg-pink text-black' : 'text-fg-muted hover:text-fg')}
+            >
+              {s === 'active' ? 'Active' : 'Inactive'}
+            </button>
+          ))}
+        </div>
         <Select
           value={funnelClientId ?? ''}
           onChange={cid => navigate(cid ? { client: cid } : {})}
@@ -94,17 +107,18 @@ export function FunnelAnalyticsView({
                 <button onClick={() => setEditing(selectedAdmin)} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg transition-colors hover:border-border-strong hover:text-pink">
                   <Pencil size={13} /> Edit
                 </button>
-                <StatusButton funnelId={selectedAdmin.id} to="archived" onDone={() => navigate({ client: funnelClientId ?? undefined })} />
+                <StatusButton
+                  funnelId={selectedAdmin.id}
+                  to={selectedAdmin.status === 'active' ? 'archived' : 'active'}
+                  onDone={() => navigate({ client: funnelClientId ?? undefined })}
+                />
               </div>
             )}
           </div>
           <MetricsPanel metrics={detail} clientName={funnelClientName ?? ''} logoUrl={clientInfo.get(detail.client_id)?.logo_url ?? null} />
         </>
       ) : (
-        <>
-          <Overview metricsList={metricsList} clientInfo={clientInfo} groupByClient={!funnelClientId} onOpen={(cid, fid) => navigate({ client: cid, funnel: fid })} />
-          {archived.length > 0 && <ArchivedFunnels funnels={archived} clientInfo={clientInfo} />}
-        </>
+        <Overview metricsList={metricsList} clientInfo={clientInfo} groupByClient={!funnelClientId} status={funnelStatus} onOpen={(cid, fid) => navigate({ client: cid, funnel: fid })} />
       )}
 
       {editing && (
@@ -123,7 +137,7 @@ function StatusButton({ funnelId, to, onDone }: { funnelId: string; to: 'active'
   const [pending, start] = useTransition();
   const archiving = to === 'archived';
   const onClick = () => {
-    if (archiving && !window.confirm('Archive this funnel? It will be hidden from analytics but can be restored later.')) return;
+    if (archiving && !window.confirm('Set this funnel to inactive? It will be archived and hidden from the active list — you can reactivate it anytime.')) return;
     start(async () => { await setFunnelStatusAction(funnelId, to); onDone?.(); });
   };
   return (
@@ -133,46 +147,28 @@ function StatusButton({ funnelId, to, onDone }: { funnelId: string; to: 'active'
       className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-muted transition-colors hover:border-border-strong hover:text-fg disabled:opacity-50"
     >
       {pending ? <Loader2 size={13} className="animate-spin" /> : archiving ? <Archive size={13} /> : <ArchiveRestore size={13} />}
-      {archiving ? 'Archive' : 'Restore'}
+      {archiving ? 'Set inactive' : 'Set active'}
     </button>
-  );
-}
-
-function ArchivedFunnels({ funnels, clientInfo }: { funnels: AdminFunnel[]; clientInfo: Map<string, ClientOption> }) {
-  return (
-    <div>
-      <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-fg-muted">Archived ({funnels.length})</div>
-      <div className="overflow-hidden rounded-xl border border-border">
-        {funnels.map((f, i) => (
-          <div key={f.id} className={cn('flex items-center gap-3 bg-surface px-4 py-3', i < funnels.length - 1 && 'border-b border-border')}>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-fg-muted">{f.name}</div>
-              <div className="truncate text-xs text-fg-dim">{clientInfo.get(f.client_id)?.client_name ?? f.client_id}</div>
-            </div>
-            <StatusButton funnelId={f.id} to="active" />
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 
 // ─── Overview (all funnels, grouped by client) ───────────────────────────────
 
 function Overview({
-  metricsList, clientInfo, groupByClient, onOpen,
+  metricsList, clientInfo, groupByClient, status, onOpen,
 }: {
   metricsList: FunnelMetrics[];
   clientInfo: Map<string, ClientOption>;
   groupByClient: boolean;
+  status: 'active' | 'archived';
   onOpen: (clientId: string, funnelId: string) => void;
 }) {
   if (metricsList.length === 0) {
     return (
       <div className="rounded-2xl border border-border bg-surface p-12 text-center">
         <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-pink/10"><FlaskConical size={20} className="text-pink" /></div>
-        <div className="mb-1 text-sm text-fg">No funnels to show</div>
-        <div className="text-xs text-fg-muted">Use “Manage funnels” to add one.</div>
+        <div className="mb-1 text-sm text-fg">{status === 'active' ? 'No active funnels' : 'No inactive funnels'}</div>
+        <div className="text-xs text-fg-muted">{status === 'active' ? 'Use “Add funnel” to create one.' : 'Funnels you set to inactive will appear here.'}</div>
       </div>
     );
   }

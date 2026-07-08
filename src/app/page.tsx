@@ -25,7 +25,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'clients' | 'admin';
-type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string };
+type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string };
 
 function parseView(v: string | undefined): View {
   const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'clients', 'admin'];
@@ -78,11 +78,12 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   // Funnel Analytics. Default view = overview of all active funnels (grouped by
   // client, or scoped to the selected client). Drilling into a specific funnel
   // (?funnel=) shows its detailed LP Views → Opt-ins → Deposits breakdown.
-  const activeFunnels = adminFunnels.filter(f => f.status === 'active');
-  const clientFunnels = funnelClientId ? activeFunnels.filter(f => f.client_id === funnelClientId) : [];
-  const selectedFunnel = funnelFilter ? activeFunnels.find(f => f.id === funnelFilter) ?? null : null;
+  const funnelStatus = params.fstatus === 'archived' ? 'archived' : 'active';
+  const statusFunnels = adminFunnels.filter(f => f.status === funnelStatus);
+  const clientFunnels = funnelClientId ? statusFunnels.filter(f => f.client_id === funnelClientId) : [];
+  const selectedFunnel = funnelFilter ? adminFunnels.find(f => f.id === funnelFilter) ?? null : null;
   const funnelsToShow = view === 'funnel'
-    ? (selectedFunnel ? [selectedFunnel] : (funnelClientId ? clientFunnels : activeFunnels))
+    ? (selectedFunnel ? [selectedFunnel] : (funnelClientId ? clientFunnels : statusFunnels))
     : [];
   const funnelMetricsList = await Promise.all(funnelsToShow.map(f => getFunnelMetrics(f, range)));
   const funnelClientName = funnelClientId
@@ -132,6 +133,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
             clients={clients}
             adminFunnels={adminFunnels}
             metricsList={funnelMetricsList}
+            funnelStatus={funnelStatus}
             funnelClientId={funnelClientId ?? null}
             funnelClientName={funnelClientName}
             selectedFunnelId={selectedFunnel?.id ?? null}
