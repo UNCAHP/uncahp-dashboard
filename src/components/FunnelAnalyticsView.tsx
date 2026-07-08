@@ -118,7 +118,7 @@ export function FunnelAnalyticsView({
           <MetricsPanel metrics={detail} clientName={funnelClientName ?? ''} logoUrl={clientInfo.get(detail.client_id)?.logo_url ?? null} />
         </>
       ) : (
-        <Overview metricsList={metricsList} clientInfo={clientInfo} groupByClient={!funnelClientId} status={funnelStatus} onOpen={(cid, fid) => navigate({ client: cid, funnel: fid })} />
+        <Overview metricsList={metricsList} clientInfo={clientInfo} status={funnelStatus} onOpen={(cid, fid) => navigate({ client: cid, funnel: fid })} />
       )}
 
       {editing && (
@@ -155,11 +155,10 @@ function StatusButton({ funnelId, to, onDone }: { funnelId: string; to: 'active'
 // ─── Overview (all funnels, grouped by client) ───────────────────────────────
 
 function Overview({
-  metricsList, clientInfo, groupByClient, status, onOpen,
+  metricsList, clientInfo, status, onOpen,
 }: {
   metricsList: FunnelMetrics[];
   clientInfo: Map<string, ClientOption>;
-  groupByClient: boolean;
   status: 'active' | 'archived';
   onOpen: (clientId: string, funnelId: string) => void;
 }) {
@@ -173,45 +172,19 @@ function Overview({
     );
   }
 
-  // Group by client, preserving name order.
-  const groups = new Map<string, FunnelMetrics[]>();
-  for (const m of metricsList) {
-    const list = groups.get(m.client_id) ?? [];
-    list.push(m);
-    groups.set(m.client_id, list);
-  }
-  const ordered = [...groups.entries()].sort((a, b) => {
-    const an = clientInfo.get(a[0])?.client_name ?? a[0];
-    const bn = clientInfo.get(b[0])?.client_name ?? b[0];
-    return an.localeCompare(bn);
+  // One flat responsive grid so cards fill the row. Sorted by client, then funnel,
+  // so a client's funnels stay adjacent (each card also shows its client).
+  const sorted = [...metricsList].sort((a, b) => {
+    const an = clientInfo.get(a.client_id)?.client_name ?? a.client_id;
+    const bn = clientInfo.get(b.client_id)?.client_name ?? b.client_id;
+    return an.localeCompare(bn) || a.funnel_name.localeCompare(b.funnel_name);
   });
 
   return (
-    <div className="space-y-8">
-      {ordered.map(([clientId, list]) => {
-        const info = clientInfo.get(clientId);
-        return (
-          <div key={clientId}>
-            {groupByClient && (
-              <div className="mb-3 flex items-center gap-2.5">
-                {info?.logo_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={info.logo_url} alt="" className="h-7 w-7 rounded-md border border-border object-cover" />
-                ) : (
-                  <div className="flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold text-fg-muted" style={{ background: clientColor(clientId) }}>
-                    {clientInitials(info?.client_name ?? '?')}
-                  </div>
-                )}
-                <span className="text-sm font-semibold text-fg">{info?.client_name ?? clientId}</span>
-                <span className="text-xs text-fg-dim">· {list.length} funnel{list.length === 1 ? '' : 's'}</span>
-              </div>
-            )}
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {list.map(m => <FunnelSummaryCard key={m.funnel_id} m={m} client={info} onClick={() => onOpen(clientId, m.funnel_id)} />)}
-            </div>
-          </div>
-        );
-      })}
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {sorted.map(m => (
+        <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} onClick={() => onOpen(m.client_id, m.funnel_id)} />
+      ))}
     </div>
   );
 }

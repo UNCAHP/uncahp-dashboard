@@ -10,6 +10,13 @@ import { cn } from '@/lib/utils';
 const inputCls =
   'w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-fg placeholder:text-fg-dim focus:border-border-strong focus:outline-none';
 
+// Sensible starting pages for a new funnel — names pre-filled, URLs left blank.
+const DEFAULT_PAGES: FunnelPageLink[] = [
+  { name: 'Landing Page', url: '' },
+  { name: 'Deposit Page', url: '' },
+  { name: 'Thank You Page', url: '' },
+];
+
 export function FunnelFormModal({
   initial, clients, onClose,
 }: {
@@ -24,7 +31,7 @@ export function FunnelFormModal({
   const [optinTags, setOptinTags] = useState<string[]>(initial?.optin_tags ?? []);
   const [depositTags, setDepositTags] = useState<string[]>(initial?.deposit_tags ?? []);
   const [campaignIds, setCampaignIds] = useState<string[]>(initial?.meta_campaign_ids ?? []);
-  const [pages, setPages] = useState<FunnelPageLink[]>(initial?.pages ?? []);
+  const [pages, setPages] = useState<FunnelPageLink[]>(initial?.pages ?? DEFAULT_PAGES);
 
   const [tags, setTags] = useState<TagOption[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
@@ -187,17 +194,18 @@ function TagMultiSelect({
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 py-10">
-      <div className="fixed inset-0 bg-black/70" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-2xl rounded-2xl border border-border bg-surface shadow-2xl">
-        <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pink/10"><FlaskConical size={16} className="text-pink" /></div>
-            <h2 className="text-base font-semibold text-fg">{title}</h2>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70" onClick={onClose}>
+      <div className="flex min-h-full items-center justify-center p-4">
+        <div onClick={e => e.stopPropagation()} className="w-full max-w-2xl rounded-2xl border border-border bg-surface shadow-2xl">
+          <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pink/10"><FlaskConical size={16} className="text-pink" /></div>
+              <h2 className="text-base font-semibold text-fg">{title}</h2>
+            </div>
+            <button onClick={onClose} className="text-fg-muted hover:text-fg" aria-label="Close"><X size={18} /></button>
           </div>
-          <button onClick={onClose} className="text-fg-muted hover:text-fg" aria-label="Close"><X size={18} /></button>
+          <div className="px-6 py-5">{children}</div>
         </div>
-        <div className="px-6 py-5">{children}</div>
       </div>
     </div>
   );
