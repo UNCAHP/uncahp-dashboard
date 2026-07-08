@@ -4,7 +4,7 @@ import {
   Percent, Eye, ShoppingCart,
 } from 'lucide-react';
 import { Sidebar } from '@/components/Sidebar';
-import { DashboardSkeleton } from '@/components/DashboardSkeleton';
+import { ContentSkeleton } from '@/components/DashboardSkeleton';
 import { Topbar } from '@/components/Topbar';
 import { KpiCardV2 } from '@/components/KpiCardV2';
 import { GaugeCard } from '@/components/GaugeCard';
@@ -16,7 +16,7 @@ import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
 import { ClientsView } from '@/components/ClientsView';
 import {
   defaultRange, getPortfolio, getCampaignExplorer, getClientList, getFunnelMetrics,
-  type ClientRow, type Totals, type CampaignNode,
+  type ClientRow, type Totals, type CampaignNode, type ClientOption,
 } from '@/lib/queries';
 import { getAdminClients } from '@/lib/clientAdmin';
 import { getAdminFunnels } from '@/lib/funnelAdmin';
@@ -45,25 +45,37 @@ function rangeLabel(since: string, until: string): string {
   return `${fmt(since)} – ${fmt(until)}`;
 }
 
-// Thin wrapper: a keyed Suspense boundary so the skeleton shows on the first load AND
-// on every navigation (date/view/client/funnel change re-keys → re-suspends → skeleton).
+// Range: explicit since/until wins; otherwise fall back to days (default 30).
+function paramsRange(params: SearchParams) {
+  if (isISODate(params.since) && isISODate(params.until)) {
+    return { since: params.since, until: params.until, label: rangeLabel(params.since, params.until) };
+  }
+  return defaultRange(Math.max(1, Math.min(365, Number(params.days) || 30)));
+}
+
+// Shell: the sidebar renders immediately and stays put across navigations. Only the
+// main data area is wrapped in a keyed Suspense — a date/view/client/funnel change
+// re-keys → re-suspends → shows the content skeleton (numbers only), not the whole UI.
 export default async function Page({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
+  const range = paramsRange(params);
+  const view = parseView(params.view);
+  const scopedClient = view === 'client' ? (params.client?.trim() || undefined) : undefined;
+  const clients = await getClientList();
   return (
-    <Suspense key={JSON.stringify(params)} fallback={<DashboardSkeleton />}>
-      <Dashboard params={params} />
-    </Suspense>
+    <div className="flex min-h-screen bg-bg text-fg">
+      <Sidebar view={view} selectedClient={scopedClient} since={range.since} until={range.until} clients={clients} />
+      <main className="min-w-0 flex-1">
+        <Suspense key={JSON.stringify(params)} fallback={<ContentSkeleton />}>
+          <MainContent params={params} clients={clients} />
+        </Suspense>
+      </main>
+    </div>
   );
 }
 
-async function Dashboard({ params }: { params: SearchParams }) {
-  // Range: explicit since/until wins; otherwise fall back to days (default 30).
-  let range;
-  if (isISODate(params.since) && isISODate(params.until)) {
-    range = { since: params.since, until: params.until, label: rangeLabel(params.since, params.until) };
-  } else {
-    range = defaultRange(Math.max(1, Math.min(365, Number(params.days) || 30)));
-  }
+async function MainContent({ params, clients }: { params: SearchParams; clients: ClientOption[] }) {
+  const range = paramsRange(params);
   const clientFilter = params.client?.trim() || undefined;
   const funnelFilter = params.funnel?.trim() || undefined;
   const view = parseView(params.view);
@@ -77,12 +89,11 @@ async function Dashboard({ params }: { params: SearchParams }) {
   const scopedClient = view === 'client' ? clientFilter : undefined;
   const funnelClientId = view === 'funnel' ? clientFilter : undefined;
 
-  const [{ rows, totals, freshness }, campaigns, clients, adminClients, adminFunnels] = await Promise.all([
+  const [{ rows, totals, freshness }, campaigns, adminClients, adminFunnels] = await Promise.all([
     getPortfolio(range, scopedClient),
     view === 'client' && scopedClient
       ? getCampaignExplorer(scopedClient, range)
       : Promise.resolve([] as CampaignNode[]),
-    getClientList(),
     view === 'clients' ? getAdminClients() : Promise.resolve([]),
     view === 'funnel' ? getAdminFunnels() : Promise.resolve([]),
   ]);
@@ -111,19 +122,17 @@ async function Dashboard({ params }: { params: SearchParams }) {
   };
 
   return (
-    <div className="flex min-h-screen bg-bg text-fg">
-      <Sidebar view={view} selectedClient={scopedClient} since={range.since} until={range.until} clients={clients} />
-      <main className="min-w-0 flex-1">
-        <Topbar
-          title={titles[view].title}
-          subtitle={titles[view].subtitle}
-          freshness={freshness}
-          since={range.since}
-          until={range.until}
-          view={view}
-          client={view === 'funnel' ? funnelClientId : scopedClient}
-          funnel={funnelFilter}
-        />
+    <>
+      <Topbar
+        title={titles[view].title}
+        subtitle={titles[view].subtitle}
+        freshness={freshness}
+        since={range.since}
+        until={range.until}
+        view={view}
+        client={view === 'funnel' ? funnelClientId : scopedClient}
+        funnel={funnelFilter}
+      />
         {view === 'overview' && <OverviewView rows={rows} totals={totals} rangeDays={rangeDays} since={range.since} until={range.until} />}
         {view === 'client' && (
           activeClient ? (
@@ -151,8 +160,7 @@ async function Dashboard({ params }: { params: SearchParams }) {
         {view === 'calls' && <PlaceholderView title="Call Tracking" subtitle="Inbound call performance and recordings" />}
         {view === 'clients' && <ClientsView clients={adminClients} />}
         {view === 'admin' && <PlaceholderView title="Admin Panel" subtitle="Team, integrations and workspace settings" />}
-      </main>
-    </div>
+    </>
   );
 }
 
