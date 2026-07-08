@@ -62,6 +62,7 @@ export async function createFunnelAction(_prev: ActionState, fd: FormData): Prom
       optin_tags: parseTags(field(fd, 'optin_tags')),
       deposit_tags: parseTags(field(fd, 'deposit_tags')),
       deposit_sources: parseTags(field(fd, 'deposit_sources')),
+      setter_sources: parseTags(field(fd, 'setter_sources')),
       meta_campaign_ids: parseCsv(field(fd, 'meta_campaign_ids')),
       pages: parsePages(field(fd, 'pages')),
     });
@@ -89,6 +90,7 @@ export async function updateFunnelAction(_prev: ActionState, fd: FormData): Prom
       optin_tags: parseTags(field(fd, 'optin_tags')),
       deposit_tags: parseTags(field(fd, 'deposit_tags')),
       deposit_sources: parseTags(field(fd, 'deposit_sources')),
+      setter_sources: parseTags(field(fd, 'setter_sources')),
       meta_campaign_ids: parseCsv(field(fd, 'meta_campaign_ids')),
       pages: parsePages(field(fd, 'pages')),
     }).eq('id', id);

@@ -713,13 +713,16 @@ export type FunnelMetrics = {
   client_id: string;
   lp_views: number | null;        // null when no campaigns are mapped
   optins: number;
-  deposits: number;
+  deposits: number;               // deposits_direct + deposits_setter
+  deposits_direct: number;        // paid on the funnel's own deposit page
+  deposits_setter: number;        // paid via a setter/phone link, opt-in-tag verified
   optin_rate_pct: number | null;   // opt-ins ÷ LP views
   deposit_rate_pct: number | null; // deposits ÷ opt-ins
   pages: FunnelPageLink[];
   optin_tags: string[];
   deposit_tags: string[];
   deposit_sources: string[];
+  setter_sources: string[];
   meta_campaign_count: number;
 };
 
@@ -743,9 +746,9 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
   // GHL "Tag Is [...] AND Created Between [...]" smart list exactly. Deduplicated per
   // contact (a lead who enquires multiple times counts once). Net-new only — a contact
   // created in an earlier period is not re-counted here even if it re-engages.
+  const need = funnel.optin_tags.map(t => t.toLowerCase());
   let optins = 0;
-  if (funnel.optin_tags.length > 0) {
-    const need = funnel.optin_tags.map(t => t.toLowerCase());
+  if (need.length > 0) {
     type ContactRow = { tags: unknown };
     const contacts = await fetchAll<ContactRow>(() =>
       supabase
@@ -761,13 +764,21 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     }
   }
 
-  // Deposits: succeeded transactions in range whose SOURCE (GHL's payment "Source",
-  // e.g. "LP - £50 Skin Analysis") is one this funnel counts. Dated by the charge and
-  // attributed by source — so it isolates THIS offer's deposits from the client's
-  // other offers that share a generic deposit tag.
-  let deposits = 0;
-  const sourceSet = new Set(funnel.deposit_sources.map(s => s.toLowerCase()));
-  if (sourceSet.size > 0) {
+  // Deposits: succeeded transactions in range, counted per contact, from two kinds of source.
+  //  1. Deposit sources — the funnel's own deposit page (e.g. "LP - £50 Skin Analysis").
+  //     Offer-specific, so counted unconditionally.
+  //  2. Setter sources — a shared payment link setters use over the phone. Generic across
+  //     offers, so a payment here only counts when the contact carries ALL the funnel's
+  //     opt-in tags (proving the lead came from this funnel; excludes lead-form leads that
+  //     never get those tags). Skipped entirely if no opt-in tags are configured — without
+  //     them there's nothing to verify against and we'd risk counting other offers' phone
+  //     deposits. Both sets dedupe together per contact.
+  let deposits_direct = 0;   // paid on the funnel's own deposit page
+  let deposits_setter = 0;   // paid via a setter/phone link, verified by opt-in tags
+  const directSet = new Set(funnel.deposit_sources.map(s => s.toLowerCase()));
+  const setterSet = new Set(funnel.setter_sources.map(s => s.toLowerCase()));
+  const setterActive = setterSet.size > 0 && need.length > 0;
+  if (directSet.size > 0 || setterActive) {
     type TxnRow = { contact_source_id: string | null; entity_source_name: string | null };
     const txns = await fetchAll<TxnRow>(() =>
       supabase
@@ -778,13 +789,37 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
         .gte('charge_created_at', `${range.since}T00:00:00Z`)
         .lte('charge_created_at', `${range.until}T23:59:59Z`),
     );
-    const counted = new Set<string>();
+    const directCounted = new Set<string>();    // direct-source deposits (unconditional)
+    const setterPending = new Set<string>();    // setter-source contacts awaiting tag verification
     for (const t of txns) {
+      if (!t.contact_source_id) continue;
       const src = (t.entity_source_name ?? '').toLowerCase();
-      if (sourceSet.has(src) && t.contact_source_id) counted.add(t.contact_source_id);
+      if (directSet.has(src)) directCounted.add(t.contact_source_id);
+      else if (setterActive && setterSet.has(src)) setterPending.add(t.contact_source_id);
     }
-    deposits = counted.size;
+
+    // Verify setter-source payers: keep only those carrying ALL the funnel's opt-in tags
+    // and not already counted as a direct deposit (dedupe across both source kinds).
+    const setterCounted = new Set<string>();
+    const toVerify = Array.from(setterPending).filter(id => !directCounted.has(id));
+    if (toVerify.length > 0) {
+      type ContactTagRow = { source_id: string; tags: unknown };
+      const contacts = await fetchAll<ContactTagRow>(() =>
+        supabase
+          .from('ghl_contacts')
+          .select('source_id, tags')
+          .eq('location_id', funnel.client_id)
+          .in('source_id', toVerify),
+      );
+      for (const c of contacts) {
+        const t = Array.isArray(c.tags) ? c.tags.map(x => String(x).toLowerCase()) : [];
+        if (need.every(w => t.includes(w))) setterCounted.add(c.source_id);
+      }
+    }
+    deposits_direct = directCounted.size;
+    deposits_setter = setterCounted.size;
   }
+  const deposits = deposits_direct + deposits_setter;
 
   const rate = (n: number, d: number | null) => (d && d > 0 ? +((100 * n) / d).toFixed(2) : null);
   return {
@@ -794,12 +829,15 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     lp_views,
     optins,
     deposits,
+    deposits_direct,
+    deposits_setter,
     optin_rate_pct: rate(optins, lp_views),
     deposit_rate_pct: rate(deposits, optins),
     pages: funnel.pages,
     optin_tags: funnel.optin_tags,
     deposit_tags: funnel.deposit_tags,
     deposit_sources: funnel.deposit_sources,
+    setter_sources: funnel.setter_sources,
     meta_campaign_count: funnel.meta_campaign_ids.length,
   };
 }

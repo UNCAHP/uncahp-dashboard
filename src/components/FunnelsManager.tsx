@@ -31,6 +31,7 @@ export function FunnelFormModal({
   const [optinTags, setOptinTags] = useState<string[]>(initial?.optin_tags ?? []);
   const [depositTags] = useState<string[]>(initial?.deposit_tags ?? []); // preserved, no longer edited
   const [depositSources, setDepositSources] = useState<string[]>(initial?.deposit_sources ?? []);
+  const [setterSources, setSetterSources] = useState<string[]>(initial?.setter_sources ?? []);
   const [campaignIds, setCampaignIds] = useState<string[]>(initial?.meta_campaign_ids ?? []);
   const [pages, setPages] = useState<FunnelPageLink[]>(initial?.pages ?? DEFAULT_PAGES);
 
@@ -59,6 +60,8 @@ export function FunnelFormModal({
     setCampaignIds(cur => (cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]));
   const toggleSource = (s: string) =>
     setDepositSources(cur => (cur.includes(s) ? cur.filter(x => x !== s) : [...cur, s]));
+  const toggleSetterSource = (s: string) =>
+    setSetterSources(cur => (cur.includes(s) ? cur.filter(x => x !== s) : [...cur, s]));
   const setPage = (i: number, patch: Partial<FunnelPageLink>) =>
     setPages(cur => cur.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
   const addPage = () => setPages(cur => [...cur, { name: '', url: '' }]);
@@ -72,6 +75,7 @@ export function FunnelFormModal({
         <input type="hidden" name="optin_tags" value={JSON.stringify(optinTags)} />
         <input type="hidden" name="deposit_tags" value={JSON.stringify(depositTags)} />
         <input type="hidden" name="deposit_sources" value={JSON.stringify(depositSources)} />
+        <input type="hidden" name="setter_sources" value={JSON.stringify(setterSources)} />
         <input type="hidden" name="meta_campaign_ids" value={campaignIds.join(',')} />
         <input type="hidden" name="pages" value={JSON.stringify(pages)} />
 
@@ -103,6 +107,26 @@ export function FunnelFormModal({
               sources.map(s => (
                 <label key={s.source} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs text-fg hover:bg-surface-2">
                   <input type="checkbox" checked={depositSources.includes(s.source)} onChange={() => toggleSource(s.source)} className="accent-pink" />
+                  <span className="truncate">{s.source}</span>
+                  <span className="ml-auto shrink-0 text-[9px] text-fg-dim">{s.count}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </Field>
+
+        <Field label="Setter / phone payment source(s)" hint="Shared payment links your setters use over the phone. A payment here only counts as a deposit when the contact has ALL of this funnel's opt-in tags — proving the lead came from this funnel (Meta lead-form leads without those tags are excluded).">
+          <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border bg-bg p-2">
+            {!clientId ? (
+              <div className="px-1 py-2 text-xs text-fg-dim">Pick a client first.</div>
+            ) : loadingData ? (
+              <div className="flex items-center gap-2 px-1 py-2 text-xs text-fg-dim"><Loader2 size={13} className="animate-spin" /> Loading payment sources…</div>
+            ) : sources.length === 0 ? (
+              <div className="px-1 py-2 text-xs text-fg-dim">No payment sources found for this client.</div>
+            ) : (
+              sources.map(s => (
+                <label key={s.source} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs text-fg hover:bg-surface-2">
+                  <input type="checkbox" checked={setterSources.includes(s.source)} onChange={() => toggleSetterSource(s.source)} className="accent-pink" />
                   <span className="truncate">{s.source}</span>
                   <span className="ml-auto shrink-0 text-[9px] text-fg-dim">{s.count}</span>
                 </label>

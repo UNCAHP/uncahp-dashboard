@@ -4,7 +4,7 @@ import {
   Percent, Eye, ShoppingCart,
 } from 'lucide-react';
 import { Sidebar } from '@/components/Sidebar';
-import { ContentSkeleton } from '@/components/DashboardSkeleton';
+import { ContentLoader } from '@/components/ContentLoader';
 import { Topbar } from '@/components/Topbar';
 import { KpiCardV2 } from '@/components/KpiCardV2';
 import { GaugeCard } from '@/components/GaugeCard';
@@ -66,7 +66,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
     <div className="flex min-h-screen bg-bg text-fg">
       <Sidebar view={view} selectedClient={scopedClient} since={range.since} until={range.until} clients={clients} />
       <main className="min-w-0 flex-1">
-        <Suspense key={JSON.stringify(params)} fallback={<ContentSkeleton />}>
+        <Suspense key={JSON.stringify(params)} fallback={<ContentLoader />}>
           <MainContent params={params} clients={clients} />
         </Suspense>
       </main>

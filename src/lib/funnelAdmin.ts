@@ -10,6 +10,7 @@ export type AdminFunnel = {
   optin_tags: string[];
   deposit_tags: string[];
   deposit_sources: string[]; // GHL transaction source names that count as deposits
+  setter_sources: string[];  // shared setter/phone payment sources; counted only when the contact has ALL opt-in tags
   meta_campaign_ids: string[];
   pages: FunnelPageLink[];
   created_at: string;
@@ -27,7 +28,7 @@ function normalizePages(raw: unknown): FunnelPageLink[] {
 export async function getAdminFunnels(): Promise<AdminFunnel[]> {
   const { data, error } = await supabaseAdmin
     .from('funnels')
-    .select('id, client_id, name, status, optin_tags, deposit_tags, deposit_sources, meta_campaign_ids, pages, created_at, archived_at')
+    .select('id, client_id, name, status, optin_tags, deposit_tags, deposit_sources, setter_sources, meta_campaign_ids, pages, created_at, archived_at')
     .order('status', { ascending: true })
     .order('name', { ascending: true });
   if (error) throw error;
@@ -39,6 +40,7 @@ export async function getAdminFunnels(): Promise<AdminFunnel[]> {
     optin_tags: Array.isArray(r.optin_tags) ? r.optin_tags : [],
     deposit_tags: Array.isArray(r.deposit_tags) ? r.deposit_tags : [],
     deposit_sources: Array.isArray(r.deposit_sources) ? r.deposit_sources : [],
+    setter_sources: Array.isArray(r.setter_sources) ? r.setter_sources : [],
     meta_campaign_ids: Array.isArray(r.meta_campaign_ids) ? r.meta_campaign_ids : [],
     pages: normalizePages(r.pages),
     created_at: r.created_at,

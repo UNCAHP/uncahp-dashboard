@@ -241,10 +241,15 @@ function MetricsPanel({ metrics: m, clientName, logoUrl }: { metrics: FunnelMetr
   const top = m.lp_views && m.lp_views > 0 ? m.lp_views : Math.max(m.optins, m.deposits, 1);
   const share = (v: number | null) => (v == null ? null : Math.round((v / top) * 1000) / 10);
 
+  const setterNote = m.setter_sources.length ? `+${m.setter_sources.length} phone source${m.setter_sources.length === 1 ? '' : 's'} (tag-verified)` : '';
+  const depositCaption = m.deposit_sources.length
+    ? [m.deposit_sources.join(' · '), setterNote].filter(Boolean).join(' · ')
+    : (setterNote || 'No deposit source set');
+
   const stages = [
     { key: 'lpv', label: 'LP Views', icon: Eye, value: m.lp_views, tags: m.meta_campaign_count ? `${m.meta_campaign_count} campaign${m.meta_campaign_count === 1 ? '' : 's'}` : 'No campaigns mapped' },
     { key: 'opt', label: 'Opt-ins', icon: MousePointerClick, value: m.optins, tags: m.optin_tags.length ? m.optin_tags.join(' · ') : 'No opt-in tags' },
-    { key: 'dep', label: 'Deposits', icon: Landmark, value: m.deposits, tags: m.deposit_sources.length ? m.deposit_sources.join(' · ') : 'No deposit source set' },
+    { key: 'dep', label: 'Deposits', icon: Landmark, value: m.deposits, tags: depositCaption },
   ] as const;
 
   return (
@@ -284,6 +289,9 @@ function MetricsPanel({ metrics: m, clientName, logoUrl }: { metrics: FunnelMetr
                 share={share(s.value)}
                 widthPct={s.value == null ? 0 : Math.max(4, share(s.value) ?? 0)}
                 tags={s.tags}
+                breakdown={s.key === 'dep' && m.setter_sources.length > 0
+                  ? [{ label: 'Funnel', value: m.deposits_direct }, { label: 'Phone', value: m.deposits_setter }]
+                  : undefined}
               />
               {i < stages.length - 1 && (
                 <StageConnector pct={i === 0 ? m.optin_rate_pct : m.deposit_rate_pct} dropped={s.value != null && stages[i + 1].value != null ? s.value - (stages[i + 1].value as number) : null} />
@@ -337,7 +345,7 @@ function Headline({ label, value, accent }: { label: string; value: string; acce
 }
 
 function StageCard({
-  label, icon: Icon, value, share, widthPct, tags,
+  label, icon: Icon, value, share, widthPct, tags, breakdown,
 }: {
   label: string;
   icon: typeof Eye;
@@ -345,6 +353,7 @@ function StageCard({
   share: number | null;
   widthPct: number;
   tags: string;
+  breakdown?: { label: string; value: number }[];
 }) {
   return (
     <div className="flex flex-1 flex-col rounded-xl border border-border bg-surface-2/30 p-5">
@@ -356,6 +365,16 @@ function StageCard({
         <span className="font-mono text-3xl font-bold tabular-nums text-fg">{value == null ? '—' : formatNumber(value)}</span>
         {share != null && <span className="text-xs tabular-nums text-fg-dim">{share}%</span>}
       </div>
+      {breakdown && (
+        <div className="mt-2.5 flex gap-2">
+          {breakdown.map(b => (
+            <div key={b.label} className="flex flex-1 flex-col items-center gap-0.5 rounded-lg border border-border/60 bg-surface-2/40 px-2.5 py-2">
+              <span className="text-[9px] font-medium uppercase tracking-wide text-fg-muted">{b.label}</span>
+              <span className="font-mono text-base font-bold tabular-nums text-fg">{formatNumber(b.value)}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="mt-1 truncate text-[11px] text-fg-dim" title={tags}>{tags}</div>
       <div className="mt-auto pt-4">
         <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
