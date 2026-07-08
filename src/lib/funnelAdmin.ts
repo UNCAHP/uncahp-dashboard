@@ -9,6 +9,7 @@ export type AdminFunnel = {
   status: 'active' | 'archived';
   optin_tags: string[];
   deposit_tags: string[];
+  deposit_sources: string[]; // GHL transaction source names that count as deposits
   meta_campaign_ids: string[];
   pages: FunnelPageLink[];
   created_at: string;
@@ -26,7 +27,7 @@ function normalizePages(raw: unknown): FunnelPageLink[] {
 export async function getAdminFunnels(): Promise<AdminFunnel[]> {
   const { data, error } = await supabaseAdmin
     .from('funnels')
-    .select('id, client_id, name, status, optin_tags, deposit_tags, meta_campaign_ids, pages, created_at, archived_at')
+    .select('id, client_id, name, status, optin_tags, deposit_tags, deposit_sources, meta_campaign_ids, pages, created_at, archived_at')
     .order('status', { ascending: true })
     .order('name', { ascending: true });
   if (error) throw error;
@@ -37,6 +38,7 @@ export async function getAdminFunnels(): Promise<AdminFunnel[]> {
     status: (r.status === 'archived' ? 'archived' : 'active') as 'active' | 'archived',
     optin_tags: Array.isArray(r.optin_tags) ? r.optin_tags : [],
     deposit_tags: Array.isArray(r.deposit_tags) ? r.deposit_tags : [],
+    deposit_sources: Array.isArray(r.deposit_sources) ? r.deposit_sources : [],
     meta_campaign_ids: Array.isArray(r.meta_campaign_ids) ? r.meta_campaign_ids : [],
     pages: normalizePages(r.pages),
     created_at: r.created_at,
@@ -67,6 +69,27 @@ export async function getClientTags(clientId: string): Promise<TagOption[]> {
   }
   return Array.from(counts.entries())
     .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+// Distinct succeeded-transaction source names for a client — powers the deposit-source
+// picker. These are GHL's payment "Source" values (e.g. "LP - £50 Skin Analysis").
+export type SourceOption = { source: string; count: number };
+export async function getClientTransactionSources(clientId: string): Promise<SourceOption[]> {
+  const { data, error } = await supabaseAdmin
+    .from('ghl_transactions')
+    .select('entity_source_name')
+    .eq('location_id', clientId)
+    .eq('status', 'succeeded')
+    .limit(5000);
+  if (error) throw error;
+  const counts = new Map<string, number>();
+  for (const r of data ?? []) {
+    const s = typeof r.entity_source_name === 'string' ? r.entity_source_name.trim() : '';
+    if (s) counts.set(s, (counts.get(s) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([source, count]) => ({ source, count }))
     .sort((a, b) => b.count - a.count);
 }
 

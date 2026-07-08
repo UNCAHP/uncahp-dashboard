@@ -3,7 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { supabaseAdmin } from '@/lib/supabase';
 import {
-  getClientTags, getClientCampaigns, type TagOption, type CampaignOption, type FunnelPageLink,
+  getClientTags, getClientCampaigns, getClientTransactionSources,
+  type TagOption, type CampaignOption, type SourceOption, type FunnelPageLink,
 } from '@/lib/funnelAdmin';
 
 export type ActionState = { ok: boolean; error?: string };
@@ -60,6 +61,7 @@ export async function createFunnelAction(_prev: ActionState, fd: FormData): Prom
       status: 'active',
       optin_tags: parseTags(field(fd, 'optin_tags')),
       deposit_tags: parseTags(field(fd, 'deposit_tags')),
+      deposit_sources: parseTags(field(fd, 'deposit_sources')),
       meta_campaign_ids: parseCsv(field(fd, 'meta_campaign_ids')),
       pages: parsePages(field(fd, 'pages')),
     });
@@ -86,6 +88,7 @@ export async function updateFunnelAction(_prev: ActionState, fd: FormData): Prom
       name,
       optin_tags: parseTags(field(fd, 'optin_tags')),
       deposit_tags: parseTags(field(fd, 'deposit_tags')),
+      deposit_sources: parseTags(field(fd, 'deposit_sources')),
       meta_campaign_ids: parseCsv(field(fd, 'meta_campaign_ids')),
       pages: parsePages(field(fd, 'pages')),
     }).eq('id', id);
@@ -110,8 +113,12 @@ export async function setFunnelStatusAction(id: string, status: 'active' | 'arch
 }
 
 // Called from the form when a client is chosen, to populate the tag + campaign pickers.
-export async function loadFunnelFormData(clientId: string): Promise<{ tags: TagOption[]; campaigns: CampaignOption[] }> {
-  if (!clientId) return { tags: [], campaigns: [] };
-  const [tags, campaigns] = await Promise.all([getClientTags(clientId), getClientCampaigns(clientId)]);
-  return { tags, campaigns };
+export async function loadFunnelFormData(clientId: string): Promise<{ tags: TagOption[]; campaigns: CampaignOption[]; sources: SourceOption[] }> {
+  if (!clientId) return { tags: [], campaigns: [], sources: [] };
+  const [tags, campaigns, sources] = await Promise.all([
+    getClientTags(clientId),
+    getClientCampaigns(clientId),
+    getClientTransactionSources(clientId),
+  ]);
+  return { tags, campaigns, sources };
 }

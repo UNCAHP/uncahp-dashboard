@@ -2,7 +2,7 @@
 
 import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, MousePointerClick, Landmark, ExternalLink, FlaskConical, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle } from 'lucide-react';
+import { Eye, MousePointerClick, Landmark, ExternalLink, FlaskConical, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle, Search } from 'lucide-react';
 import type { ClientOption, FunnelMetrics } from '@/lib/queries';
 import type { AdminFunnel, FunnelPageLink } from '@/lib/funnelAdmin';
 import { FunnelFormModal } from '@/components/FunnelsManager';
@@ -15,32 +15,26 @@ type Props = {
   adminFunnels: AdminFunnel[];
   metricsList: FunnelMetrics[];
   funnelStatus: 'active' | 'archived';
-  funnelClientId: string | null;
-  funnelClientName: string | null;
   selectedFunnelId: string | null;
   since: string;
   until: string;
 };
 
 export function FunnelAnalyticsView({
-  clients, adminFunnels, metricsList, funnelStatus, funnelClientId, funnelClientName, selectedFunnelId, since, until,
+  clients, adminFunnels, metricsList, funnelStatus, selectedFunnelId, since, until,
 }: Props) {
   const router = useRouter();
   const [editing, setEditing] = useState<AdminFunnel | 'new' | null>(null);
+  const [search, setSearch] = useState('');
 
-  const statusFunnels = adminFunnels.filter(f => f.status === funnelStatus);
-  const clientIdsWithFunnels = new Set(statusFunnels.map(f => f.client_id));
-  const clientOptions = clients.filter(c => clientIdsWithFunnels.has(c.client_id));
-  const clientFunnels = funnelClientId ? statusFunnels.filter(f => f.client_id === funnelClientId) : [];
   const clientInfo = new Map(clients.map(c => [c.client_id, c]));
   const selectedAdmin = selectedFunnelId ? adminFunnels.find(f => f.id === selectedFunnelId) ?? null : null;
 
-  const navigate = (next: { client?: string; funnel?: string; fstatus?: 'active' | 'archived' }) => {
+  const navigate = (next: { funnel?: string; fstatus?: 'active' | 'archived' }) => {
     const params = new URLSearchParams();
     params.set('view', 'funnel');
     params.set('since', since);
     params.set('until', until);
-    if (next.client) params.set('client', next.client);
     if (next.funnel) params.set('funnel', next.funnel);
     const fs = next.fstatus ?? funnelStatus;
     if (fs === 'archived') params.set('fstatus', 'archived');
@@ -48,6 +42,14 @@ export function FunnelAnalyticsView({
   };
 
   const detail = selectedFunnelId ? metricsList.find(m => m.funnel_id === selectedFunnelId) ?? null : null;
+
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? metricsList.filter(m => {
+        const cn = (clientInfo.get(m.client_id)?.client_name ?? '').toLowerCase();
+        return cn.includes(q) || m.funnel_name.toLowerCase().includes(q);
+      })
+    : metricsList;
 
   return (
     <div className="space-y-6 p-8">
@@ -66,40 +68,10 @@ export function FunnelAnalyticsView({
         </button>
       </div>
 
-      {/* Selectors */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
-          {(['active', 'archived'] as const).map(s => (
-            <button
-              key={s}
-              onClick={() => navigate({ client: funnelClientId ?? undefined, fstatus: s })}
-              className={cn('rounded-md px-3 py-1.5 text-xs font-medium transition-colors', funnelStatus === s ? 'bg-pink text-black' : 'text-fg-muted hover:text-fg')}
-            >
-              {s === 'active' ? 'Active' : 'Inactive'}
-            </button>
-          ))}
-        </div>
-        <Select
-          value={funnelClientId ?? ''}
-          onChange={cid => navigate(cid ? { client: cid } : {})}
-          options={[{ value: '', label: 'All clients' }, ...clientOptions.map(c => ({ value: c.client_id, label: c.client_name }))]}
-        />
-        <Select
-          value={selectedFunnelId ?? ''}
-          onChange={fid => navigate({ client: funnelClientId ?? undefined, funnel: fid || undefined })}
-          disabled={!funnelClientId}
-          options={[
-            { value: '', label: !funnelClientId ? 'All funnels' : `All ${funnelClientName ?? ''} funnels`.trim() },
-            ...clientFunnels.map(f => ({ value: f.id, label: f.name })),
-          ]}
-          wide
-        />
-      </div>
-
       {detail ? (
         <>
           <div className="flex items-center justify-between gap-3">
-            <button onClick={() => navigate({ client: funnelClientId ?? undefined })} className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-pink">
+            <button onClick={() => navigate({})} className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-pink">
               <ArrowLeft size={14} /> Back to funnels
             </button>
             {selectedAdmin && (
@@ -110,15 +82,39 @@ export function FunnelAnalyticsView({
                 <StatusButton
                   funnelId={selectedAdmin.id}
                   to={selectedAdmin.status === 'active' ? 'archived' : 'active'}
-                  onDone={() => navigate({ client: funnelClientId ?? undefined })}
+                  onDone={() => navigate({})}
                 />
               </div>
             )}
           </div>
-          <MetricsPanel metrics={detail} clientName={funnelClientName ?? ''} logoUrl={clientInfo.get(detail.client_id)?.logo_url ?? null} />
+          <MetricsPanel metrics={detail} clientName={clientInfo.get(detail.client_id)?.client_name ?? ''} logoUrl={clientInfo.get(detail.client_id)?.logo_url ?? null} />
         </>
       ) : (
-        <Overview metricsList={metricsList} clientInfo={clientInfo} status={funnelStatus} onOpen={(cid, fid) => navigate({ client: cid, funnel: fid })} />
+        <>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+              {(['active', 'archived'] as const).map(s => (
+                <button
+                  key={s}
+                  onClick={() => navigate({ fstatus: s })}
+                  className={cn('rounded-md px-3 py-1.5 text-xs font-medium transition-colors', funnelStatus === s ? 'bg-pink text-black' : 'text-fg-muted hover:text-fg')}
+                >
+                  {s === 'active' ? 'Active' : 'Inactive'}
+                </button>
+              ))}
+            </div>
+            <div className="relative max-w-xs flex-1">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim" />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search clients or funnels…"
+                className="w-full rounded-lg border border-border bg-surface py-2 pl-9 pr-3 text-sm text-fg placeholder:text-fg-dim focus:border-border-strong focus:outline-none"
+              />
+            </div>
+          </div>
+          <Overview metricsList={filtered} clientInfo={clientInfo} status={funnelStatus} onOpen={fid => navigate({ funnel: fid })} />
+        </>
       )}
 
       {editing && (
@@ -160,7 +156,7 @@ function Overview({
   metricsList: FunnelMetrics[];
   clientInfo: Map<string, ClientOption>;
   status: 'active' | 'archived';
-  onOpen: (clientId: string, funnelId: string) => void;
+  onOpen: (funnelId: string) => void;
 }) {
   if (metricsList.length === 0) {
     return (
@@ -183,7 +179,7 @@ function Overview({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {sorted.map(m => (
-        <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} onClick={() => onOpen(m.client_id, m.funnel_id)} />
+        <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} onClick={() => onOpen(m.funnel_id)} />
       ))}
     </div>
   );
@@ -248,7 +244,7 @@ function MetricsPanel({ metrics: m, clientName, logoUrl }: { metrics: FunnelMetr
   const stages = [
     { key: 'lpv', label: 'LP Views', icon: Eye, value: m.lp_views, tags: m.meta_campaign_count ? `${m.meta_campaign_count} campaign${m.meta_campaign_count === 1 ? '' : 's'}` : 'No campaigns mapped' },
     { key: 'opt', label: 'Opt-ins', icon: MousePointerClick, value: m.optins, tags: m.optin_tags.length ? m.optin_tags.join(' · ') : 'No opt-in tags' },
-    { key: 'dep', label: 'Deposits', icon: Landmark, value: m.deposits, tags: m.deposit_tags.length ? m.deposit_tags.join(' · ') : 'No deposit tags' },
+    { key: 'dep', label: 'Deposits', icon: Landmark, value: m.deposits, tags: m.deposit_sources.length ? m.deposit_sources.join(' · ') : 'No deposit source set' },
   ] as const;
 
   return (
@@ -416,26 +412,3 @@ function PageArrow() {
   );
 }
 
-function Select({
-  value, onChange, options, disabled, wide,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-  disabled?: boolean;
-  wide?: boolean;
-}) {
-  return (
-    <div className={cn('relative', wide && 'max-w-md flex-1')}>
-      <select
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        disabled={disabled}
-        className="w-full cursor-pointer appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-8 text-sm text-fg focus:border-border-strong focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-      <ChevronRight size={12} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rotate-90 text-fg-dim" />
-    </div>
-  );
-}

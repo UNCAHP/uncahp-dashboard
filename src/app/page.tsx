@@ -86,9 +86,6 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
     ? (selectedFunnel ? [selectedFunnel] : (funnelClientId ? clientFunnels : statusFunnels))
     : [];
   const funnelMetricsList = await Promise.all(funnelsToShow.map(f => getFunnelMetrics(f, range)));
-  const funnelClientName = funnelClientId
-    ? clients.find(c => c.client_id === funnelClientId)?.client_name ?? null
-    : null;
 
   const activeClient = scopedClient ? clients.find(c => c.client_id === scopedClient) : null;
 
@@ -134,8 +131,6 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
             adminFunnels={adminFunnels}
             metricsList={funnelMetricsList}
             funnelStatus={funnelStatus}
-            funnelClientId={funnelClientId ?? null}
-            funnelClientName={funnelClientName}
             selectedFunnelId={selectedFunnel?.id ?? null}
             since={range.since}
             until={range.until}

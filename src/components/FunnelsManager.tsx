@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useId, useState, useTransition } from 'react';
 import { Plus, X, Loader2, FlaskConical, Trash2, Link2 } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
-import type { AdminFunnel, FunnelPageLink, TagOption, CampaignOption } from '@/lib/funnelAdmin';
+import type { AdminFunnel, FunnelPageLink, TagOption, CampaignOption, SourceOption } from '@/lib/funnelAdmin';
 import { createFunnelAction, updateFunnelAction, loadFunnelFormData, type ActionState } from '@/app/actions/funnels';
 import { cn } from '@/lib/utils';
 
@@ -29,12 +29,14 @@ export function FunnelFormModal({
 
   const [clientId, setClientId] = useState(initial?.client_id ?? '');
   const [optinTags, setOptinTags] = useState<string[]>(initial?.optin_tags ?? []);
-  const [depositTags, setDepositTags] = useState<string[]>(initial?.deposit_tags ?? []);
+  const [depositTags] = useState<string[]>(initial?.deposit_tags ?? []); // preserved, no longer edited
+  const [depositSources, setDepositSources] = useState<string[]>(initial?.deposit_sources ?? []);
   const [campaignIds, setCampaignIds] = useState<string[]>(initial?.meta_campaign_ids ?? []);
   const [pages, setPages] = useState<FunnelPageLink[]>(initial?.pages ?? DEFAULT_PAGES);
 
   const [tags, setTags] = useState<TagOption[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
+  const [sources, setSources] = useState<SourceOption[]>([]);
   const [loadingData, startLoad] = useTransition();
 
   useEffect(() => {
@@ -42,6 +44,7 @@ export function FunnelFormModal({
       const data = await loadFunnelFormData(clientId);
       setTags(data.tags);
       setCampaigns(data.campaigns);
+      setSources(data.sources);
     });
   }, [clientId]);
 
@@ -54,6 +57,8 @@ export function FunnelFormModal({
 
   const toggleCampaign = (id: string) =>
     setCampaignIds(cur => (cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]));
+  const toggleSource = (s: string) =>
+    setDepositSources(cur => (cur.includes(s) ? cur.filter(x => x !== s) : [...cur, s]));
   const setPage = (i: number, patch: Partial<FunnelPageLink>) =>
     setPages(cur => cur.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
   const addPage = () => setPages(cur => [...cur, { name: '', url: '' }]);
@@ -66,6 +71,7 @@ export function FunnelFormModal({
         <input type="hidden" name="client_id" value={clientId} />
         <input type="hidden" name="optin_tags" value={JSON.stringify(optinTags)} />
         <input type="hidden" name="deposit_tags" value={JSON.stringify(depositTags)} />
+        <input type="hidden" name="deposit_sources" value={JSON.stringify(depositSources)} />
         <input type="hidden" name="meta_campaign_ids" value={campaignIds.join(',')} />
         <input type="hidden" name="pages" value={JSON.stringify(pages)} />
 
@@ -81,14 +87,29 @@ export function FunnelFormModal({
           </Field>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Opt-in tags" hint={clientId ? 'Contacts with ANY of these tags count as an opt-in' : 'Pick a client first'}>
-            <TagMultiSelect value={optinTags} onChange={setOptinTags} options={tags} placeholder="e.g. lead complete" disabled={!clientId} />
-          </Field>
-          <Field label="Deposit tags" hint={clientId ? 'Contacts with ANY of these tags count as a deposit' : 'Pick a client first'}>
-            <TagMultiSelect value={depositTags} onChange={setDepositTags} options={tags} placeholder="e.g. deposit paid" disabled={!clientId} />
-          </Field>
-        </div>
+        <Field label="Opt-in tags" hint={clientId ? 'Contacts with ANY of these tags count as an opt-in' : 'Pick a client first'}>
+          <TagMultiSelect value={optinTags} onChange={setOptinTags} options={tags} placeholder="e.g. lead complete" disabled={!clientId} />
+        </Field>
+
+        <Field label="Deposit source(s)" hint="Payments from these GHL transaction sources count as this funnel's deposits">
+          <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border bg-bg p-2">
+            {!clientId ? (
+              <div className="px-1 py-2 text-xs text-fg-dim">Pick a client first.</div>
+            ) : loadingData ? (
+              <div className="flex items-center gap-2 px-1 py-2 text-xs text-fg-dim"><Loader2 size={13} className="animate-spin" /> Loading payment sources…</div>
+            ) : sources.length === 0 ? (
+              <div className="px-1 py-2 text-xs text-fg-dim">No payment sources found for this client.</div>
+            ) : (
+              sources.map(s => (
+                <label key={s.source} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs text-fg hover:bg-surface-2">
+                  <input type="checkbox" checked={depositSources.includes(s.source)} onChange={() => toggleSource(s.source)} className="accent-pink" />
+                  <span className="truncate">{s.source}</span>
+                  <span className="ml-auto shrink-0 text-[9px] text-fg-dim">{s.count}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </Field>
 
         <Field label="Meta campaigns (LP views)" hint="Which campaigns feed this funnel's landing-page views">
           <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border bg-bg p-2">
