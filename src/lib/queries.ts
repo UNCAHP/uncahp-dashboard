@@ -722,6 +722,20 @@ export type FunnelMetrics = {
   meta_campaign_count: number;
 };
 
+// Fetch lowercased tag lists for a set of GHL contact ids (by source_id), chunked to
+// keep the `in(...)` query URLs within limits.
+async function tagsForContacts(ids: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const { data } = await supabase.from('ghl_contacts').select('source_id, tags').in('source_id', chunk);
+    for (const c of data ?? []) {
+      out.set(c.source_id, Array.isArray(c.tags) ? c.tags.map((t: unknown) => String(t).toLowerCase()) : []);
+    }
+  }
+  return out;
+}
+
 export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): Promise<FunnelMetrics> {
   // LP views from Meta landing_page_view for the mapped campaigns.
   let lp_views: number | null = null;
@@ -738,31 +752,60 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     lp_views = rows.reduce((s, r) => s + extractAction(r.actions, 'landing_page_view'), 0);
   }
 
-  // Opt-ins + deposits: count contacts (added in range) carrying ANY matching tag.
-  type ContactRow = { tags: unknown };
-  const contacts = await fetchAll<ContactRow>(() =>
-    supabase
-      .from('ghl_contacts')
-      .select('tags')
-      .eq('location_id', funnel.client_id)
-      .gte('date_added', `${range.since}T00:00:00Z`)
-      .lte('date_added', `${range.until}T23:59:59Z`),
-  );
   const optinSet = new Set(funnel.optin_tags.map(t => t.toLowerCase()));
   const depositSet = new Set(funnel.deposit_tags.map(t => t.toLowerCase()));
   // A deposit is identified by tags UNIQUE to the deposit set (e.g. "deposit paid").
   // Tags shared with the opt-in set don't distinguish a deposit, so they're excluded
   // here — otherwise opt-ins and deposits collapse to the same contacts.
   const depositSignal = new Set([...depositSet].filter(t => !optinSet.has(t)));
+
+  // Opt-ins: contacts with a GHL opportunity CREATED in range who carry an opt-in tag
+  // (but not the deposit signal). Dated by the opportunity event — so an older contact
+  // re-engaging this period is counted, and attributed to this funnel by the tag.
   let optins = 0;
+  if (optinSet.size > 0) {
+    type OppRow = { contact_id: string | null };
+    const opps = await fetchAll<OppRow>(() =>
+      supabase
+        .from('ghl_opportunities')
+        .select('contact_id')
+        .eq('location_id', funnel.client_id)
+        .gte('created_at', `${range.since}T00:00:00Z`)
+        .lte('created_at', `${range.until}T23:59:59Z`),
+    );
+    const optinIds = [...new Set(opps.map(o => o.contact_id).filter((x): x is string => !!x))];
+    const tags = await tagsForContacts(optinIds);
+    const counted = new Set<string>();
+    for (const id of optinIds) {
+      const t = tags.get(id) ?? [];
+      const isDeposit = depositSignal.size > 0 && t.some(x => depositSignal.has(x));
+      if (t.some(x => optinSet.has(x)) && !isDeposit) counted.add(id);
+    }
+    optins = counted.size;
+  }
+
+  // Deposits: succeeded transactions in range whose contact carries a deposit-signal
+  // tag. Dated by the charge (so a contact created months ago who pays this period is
+  // counted) and attributed by tag (other-offer payments are excluded).
   let deposits = 0;
-  for (const c of contacts) {
-    const tags = Array.isArray(c.tags) ? c.tags.map(t => String(t).toLowerCase()) : [];
-    const isDeposit = depositSignal.size > 0 && tags.some(t => depositSignal.has(t));
-    // Opt-in = carries an opt-in tag but has NOT reached deposit (mutually exclusive).
-    const isOptin = optinSet.size > 0 && tags.some(t => optinSet.has(t)) && !isDeposit;
-    if (isDeposit) deposits++;
-    if (isOptin) optins++;
+  if (depositSignal.size > 0) {
+    type TxnRow = { contact_source_id: string | null };
+    const txns = await fetchAll<TxnRow>(() =>
+      supabase
+        .from('ghl_transactions')
+        .select('contact_source_id')
+        .eq('location_id', funnel.client_id)
+        .eq('status', 'succeeded')
+        .gte('charge_created_at', `${range.since}T00:00:00Z`)
+        .lte('charge_created_at', `${range.until}T23:59:59Z`),
+    );
+    const payerIds = [...new Set(txns.map(t => t.contact_source_id).filter((x): x is string => !!x))];
+    const tags = await tagsForContacts(payerIds);
+    const counted = new Set<string>();
+    for (const id of payerIds) {
+      if ((tags.get(id) ?? []).some(x => depositSignal.has(x))) counted.add(id);
+    }
+    deposits = counted.size;
   }
 
   const rate = (n: number, d: number | null) => (d && d > 0 ? +((100 * n) / d).toFixed(2) : null);
