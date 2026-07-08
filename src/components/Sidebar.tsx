@@ -55,11 +55,13 @@ export function Sidebar({
     >
       <div className="flex items-center justify-between border-b border-border p-4">
         {collapsed ? (
-          <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-pink text-[10px] font-bold text-black">UN</div>
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src="/UNCAHP%20LOGO.png" alt="UNCAHP" className="mx-auto h-8 w-8 object-contain" />
         ) : (
           <>
             <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pink text-[10px] font-bold text-black">UN</div>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/UNCAHP%20LOGO.png" alt="UNCAHP" className="h-9 w-9 object-contain" />
               <div>
                 <div className="text-sm font-bold leading-tight text-fg">UNCAHP</div>
                 <div className="text-[9px] uppercase tracking-widest text-fg">Client Dashboard</div>
