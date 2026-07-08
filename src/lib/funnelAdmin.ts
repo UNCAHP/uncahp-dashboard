@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabaseAdmin } from './supabase';
 
 export type FunnelPageLink = { name: string; url: string };
 
@@ -24,7 +24,7 @@ function normalizePages(raw: unknown): FunnelPageLink[] {
 }
 
 export async function getAdminFunnels(): Promise<AdminFunnel[]> {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('funnels')
     .select('id, client_id, name, status, optin_tags, deposit_tags, meta_campaign_ids, pages, created_at, archived_at')
     .order('status', { ascending: true })
@@ -49,7 +49,7 @@ export async function getAdminFunnels(): Promise<AdminFunnel[]> {
 // free-text so a rare tag can still be entered.
 export type TagOption = { tag: string; count: number };
 export async function getClientTags(clientId: string): Promise<TagOption[]> {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('ghl_contacts')
     .select('tags')
     .eq('location_id', clientId)
@@ -73,7 +73,7 @@ export async function getClientTags(clientId: string): Promise<TagOption[]> {
 // Active Meta campaigns for a client — powers the campaign-mapping picker.
 export type CampaignOption = { source_id: string; name: string; status: string | null };
 export async function getClientCampaigns(clientId: string): Promise<CampaignOption[]> {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('meta_campaigns')
     .select('source_id, name, status')
     .eq('client_id', clientId)

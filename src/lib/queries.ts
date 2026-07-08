@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, supabaseAdmin } from './supabase';
 import type { AdminFunnel, FunnelPageLink } from './funnelAdmin';
 
 export type DateRange = {
@@ -821,7 +821,8 @@ export type ClientOption = { client_id: string; client_name: string; logo_url?: 
 // with a linked ghl_location_id are returned, since without it there's no data to
 // join. Archived clients are excluded everywhere by design (strict allowlist).
 export async function getActiveClients(): Promise<ClientOption[]> {
-  const { data, error } = await supabase
+  // clients is RLS-locked → must use the service-role client.
+  const { data, error } = await supabaseAdmin
     .from('clients')
     .select('client_name, ghl_location_id, logo_url')
     .eq('status', 'active')

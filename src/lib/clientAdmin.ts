@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabaseAdmin } from './supabase';
 
 // Row shape returned to the UI. NOTE: the raw ghl_api_key is never included — only
 // whether one is set and a short masked hint. The secret stays server-side.
@@ -23,7 +23,7 @@ function maskKey(key: string | null): string | null {
 }
 
 export async function getAdminClients(): Promise<AdminClientRow[]> {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('clients')
     .select('id, client_name, status, meta_ad_account_id, ghl_location_id, ghl_api_key, logo_url, notes, created_at, archived_at')
     .order('status', { ascending: true }) // active before archived

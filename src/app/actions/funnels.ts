@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase';
 import {
   getClientTags, getClientCampaigns, type TagOption, type CampaignOption, type FunnelPageLink,
 } from '@/lib/funnelAdmin';
@@ -54,7 +54,7 @@ export async function createFunnelAction(_prev: ActionState, fd: FormData): Prom
     if (!client_id) return { ok: false, error: 'Pick a client for this funnel.' };
     if (!name) return { ok: false, error: 'Funnel name is required.' };
 
-    const { error } = await supabase.from('funnels').insert({
+    const { error } = await supabaseAdmin.from('funnels').insert({
       client_id,
       name,
       status: 'active',
@@ -81,7 +81,7 @@ export async function updateFunnelAction(_prev: ActionState, fd: FormData): Prom
     if (!client_id) return { ok: false, error: 'Pick a client for this funnel.' };
     if (!name) return { ok: false, error: 'Funnel name is required.' };
 
-    const { error } = await supabase.from('funnels').update({
+    const { error } = await supabaseAdmin.from('funnels').update({
       client_id,
       name,
       optin_tags: parseTags(field(fd, 'optin_tags')),
@@ -100,7 +100,7 @@ export async function updateFunnelAction(_prev: ActionState, fd: FormData): Prom
 
 export async function setFunnelStatusAction(id: string, status: 'active' | 'archived'): Promise<ActionState> {
   if (!id) return { ok: false, error: 'Missing funnel id.' };
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('funnels')
     .update({ status, archived_at: status === 'archived' ? new Date().toISOString() : null })
     .eq('id', id);

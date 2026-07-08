@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import sharp from 'sharp';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase';
 
 export type ActionState = { ok: boolean; error?: string };
 
@@ -54,13 +54,13 @@ async function handleLogoUpload(fd: FormData): Promise<{ url: string | null; err
   }
 
   const path = `${crypto.randomUUID()}.${ext}`;
-  const { error } = await supabase.storage.from(LOGO_BUCKET).upload(path, body, {
+  const { error } = await supabaseAdmin.storage.from(LOGO_BUCKET).upload(path, body, {
     contentType,
     upsert: false,
   });
   if (error) return { url: null, error: `Logo upload failed: ${error.message}` };
 
-  const { data } = supabase.storage.from(LOGO_BUCKET).getPublicUrl(path);
+  const { data } = supabaseAdmin.storage.from(LOGO_BUCKET).getPublicUrl(path);
   return { url: data.publicUrl };
 }
 
@@ -72,7 +72,7 @@ export async function createClientAction(_prev: ActionState, fd: FormData): Prom
     const logo = await handleLogoUpload(fd);
     if (logo.error) return { ok: false, error: logo.error };
 
-    const { error } = await supabase.from('clients').insert({
+    const { error } = await supabaseAdmin.from('clients').insert({
       client_name,
       status: 'active',
       meta_ad_account_id: field(fd, 'meta_ad_account_id'),
@@ -116,7 +116,7 @@ export async function updateClientAction(_prev: ActionState, fd: FormData): Prom
     if (logo.error) return { ok: false, error: logo.error };
     if (logo.url) patch.logo_url = logo.url;
 
-    const { error } = await supabase.from('clients').update(patch).eq('id', id);
+    const { error } = await supabaseAdmin.from('clients').update(patch).eq('id', id);
     if (error) return { ok: false, error: error.message };
     revalidatePath('/');
     return { ok: true };
@@ -129,7 +129,7 @@ export async function updateClientAction(_prev: ActionState, fd: FormData): Prom
 export async function setClientStatusAction(id: string, status: 'active' | 'archived'): Promise<ActionState> {
   if (!id) return { ok: false, error: 'Missing client id.' };
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('clients')
     .update({ status, archived_at: status === 'archived' ? new Date().toISOString() : null })
     .eq('id', id);
