@@ -753,13 +753,13 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     lp_views = rows.reduce((s, r) => s + extractAction(r.actions, 'landing_page_view'), 0);
   }
 
-  const optinSet = new Set(funnel.optin_tags.map(t => t.toLowerCase()));
-
-  // Opt-ins: contacts with a GHL opportunity CREATED in range who carry an opt-in tag.
-  // Dated by the opportunity event — so an older contact re-engaging this period is
-  // counted, and attributed to this funnel by the tag.
+  // Opt-ins: contacts carrying ALL the funnel's opt-in tags (matches GHL's "Tag Is [...]"
+  // smart-list filter — deduplicated per contact, so repeat enquiries count once, unlike
+  // Meta pixel leads). Dated by the GHL opportunity's created date, so a contact created
+  // earlier who re-engages this period is still counted (not missed by contact-created date).
   let optins = 0;
-  if (optinSet.size > 0) {
+  if (funnel.optin_tags.length > 0) {
+    const need = funnel.optin_tags.map(t => t.toLowerCase());
     type OppRow = { contact_id: string | null };
     const opps = await fetchAll<OppRow>(() =>
       supabase
@@ -769,11 +769,11 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
         .gte('created_at', `${range.since}T00:00:00Z`)
         .lte('created_at', `${range.until}T23:59:59Z`),
     );
-    const optinIds = [...new Set(opps.map(o => o.contact_id).filter((x): x is string => !!x))];
-    const tags = await tagsForContacts(optinIds);
+    const ids = [...new Set(opps.map(o => o.contact_id).filter((x): x is string => !!x))];
+    const tags = await tagsForContacts(ids);
     const counted = new Set<string>();
-    for (const id of optinIds) {
-      if ((tags.get(id) ?? []).some(x => optinSet.has(x))) counted.add(id);
+    for (const id of ids) {
+      if (need.every(w => (tags.get(id) ?? []).includes(w))) counted.add(id);
     }
     optins = counted.size;
   }

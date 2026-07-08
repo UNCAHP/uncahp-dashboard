@@ -87,7 +87,7 @@ export function FunnelFormModal({
           </Field>
         </div>
 
-        <Field label="Opt-in tags" hint={clientId ? 'Contacts with ANY of these tags count as an opt-in' : 'Pick a client first'}>
+        <Field label="Opt-in tags" hint={clientId ? 'Contacts with ALL of these tags count as an opt-in (matches a GHL "Tag Is" smart list)' : 'Pick a client first'}>
           <TagMultiSelect value={optinTags} onChange={setOptinTags} options={tags} placeholder="e.g. lead complete" disabled={!clientId} />
         </Field>
 
