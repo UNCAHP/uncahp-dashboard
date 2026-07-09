@@ -222,7 +222,8 @@ function FunnelSummaryCard({ m, client, onClick }: { m: FunnelMetrics; client?: 
             </div>
           )}
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-fg group-hover:text-pink">{m.funnel_name}</div>
+            <div className="truncate text-sm font-semibold text-fg group-hover:text-pink">{client?.client_name ?? '—'}</div>
+            <div className="mt-0.5 truncate text-[11px] font-medium text-fg-muted">{m.funnel_name}</div>
             <div className="mt-0.5 text-[11px] text-fg-dim">
               {m.meta_campaign_count} campaign{m.meta_campaign_count === 1 ? '' : 's'} · {m.pages.length} page{m.pages.length === 1 ? '' : 's'}
             </div>
