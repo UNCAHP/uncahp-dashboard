@@ -114,6 +114,17 @@ export async function setFunnelStatusAction(id: string, status: 'active' | 'arch
   return { ok: true };
 }
 
+// Permanently remove a funnel from the dashboard registry. This deletes only the funnel
+// configuration row — the underlying GHL/Meta data is untouched. Not reversible (unlike
+// archiving, which just hides it under the Inactive tab).
+export async function deleteFunnelAction(id: string): Promise<ActionState> {
+  if (!id) return { ok: false, error: 'Missing funnel id.' };
+  const { error } = await supabaseAdmin.from('funnels').delete().eq('id', id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/');
+  return { ok: true };
+}
+
 // Called from the form when a client is chosen, to populate the tag + campaign pickers.
 export async function loadFunnelFormData(clientId: string): Promise<{ tags: TagOption[]; campaigns: CampaignOption[]; sources: SourceOption[] }> {
   if (!clientId) return { tags: [], campaigns: [], sources: [] };

@@ -2,11 +2,11 @@
 
 import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, MousePointerClick, Landmark, ExternalLink, FlaskConical, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle, Search } from 'lucide-react';
+import { Eye, MousePointerClick, Landmark, ExternalLink, FlaskConical, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle, Search, Trash2 } from 'lucide-react';
 import type { ClientOption, FunnelMetrics } from '@/lib/queries';
 import type { AdminFunnel, FunnelPageLink } from '@/lib/funnelAdmin';
 import { FunnelFormModal } from '@/components/FunnelsManager';
-import { setFunnelStatusAction } from '@/app/actions/funnels';
+import { setFunnelStatusAction, deleteFunnelAction } from '@/app/actions/funnels';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
 
@@ -84,6 +84,11 @@ export function FunnelAnalyticsView({
                   to={selectedAdmin.status === 'active' ? 'archived' : 'active'}
                   onDone={() => navigate({})}
                 />
+                <DeleteButton
+                  funnelId={selectedAdmin.id}
+                  funnelName={selectedAdmin.name}
+                  onDone={() => navigate({})}
+                />
               </div>
             )}
           </div>
@@ -144,6 +149,24 @@ function StatusButton({ funnelId, to, onDone }: { funnelId: string; to: 'active'
     >
       {pending ? <Loader2 size={13} className="animate-spin" /> : archiving ? <Archive size={13} /> : <ArchiveRestore size={13} />}
       {archiving ? 'Set inactive' : 'Set active'}
+    </button>
+  );
+}
+
+function DeleteButton({ funnelId, funnelName, onDone }: { funnelId: string; funnelName: string; onDone?: () => void }) {
+  const [pending, start] = useTransition();
+  const onClick = () => {
+    if (!window.confirm(`Permanently delete "${funnelName}"?\n\nThis removes the funnel from the dashboard for good and cannot be undone. Your GHL and Meta data is not affected — only this funnel's configuration is deleted.\n\nTo just hide it instead, use “Set inactive”.`)) return;
+    start(async () => { await deleteFunnelAction(funnelId); onDone?.(); });
+  };
+  return (
+    <button
+      onClick={onClick}
+      disabled={pending}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-red/30 bg-surface px-3 py-1.5 text-xs font-medium text-red transition-colors hover:border-red/60 hover:bg-red/10 disabled:opacity-50"
+    >
+      {pending ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+      Delete
     </button>
   );
 }
