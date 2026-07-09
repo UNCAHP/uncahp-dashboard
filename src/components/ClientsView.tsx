@@ -2,12 +2,13 @@
 
 import { useActionState, useEffect, useState, useTransition } from 'react';
 import {
-  Plus, Pencil, Archive, ArchiveRestore, X, KeyRound, Building2, Loader2, ImageIcon,
+  Plus, Pencil, Archive, ArchiveRestore, X, KeyRound, Building2, Loader2, ImageIcon, RefreshCw,
 } from 'lucide-react';
 import type { AdminClientRow } from '@/lib/clientAdmin';
 import {
   createClientAction, updateClientAction, setClientStatusAction, type ActionState,
 } from '@/app/actions/clients';
+import { syncClientAction } from '@/app/actions/sync';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/Tooltip';
@@ -26,10 +27,32 @@ export function ClientsView({ clients }: { clients: AdminClientRow[] }) {
   const [tab, setTab] = useState<Tab>('active');
   const [editing, setEditing] = useState<AdminClientRow | null>(null);
   const [adding, setAdding] = useState(false);
+  const [syncAll, setSyncAll] = useState<{ done: number; total: number; ok: number; fail: number; spend: number } | null>(null);
 
   const active = clients.filter(c => c.status === 'active');
   const archived = clients.filter(c => c.status === 'archived');
   const rows = tab === 'active' ? active : archived;
+
+  // Sync every eligible active client (Meta + GHL). One short server call per client,
+  // concurrency-limited, so it never hits a serverless timeout and can show progress.
+  const runSyncAll = async () => {
+    const targets = active.filter(c => c.ghl_location_id);
+    if (targets.length === 0) return;
+    let done = 0, ok = 0, fail = 0, spend = 0, idx = 0;
+    setSyncAll({ done, total: targets.length, ok, fail, spend });
+    const worker = async () => {
+      while (idx < targets.length) {
+        const c = targets[idx++];
+        const { meta, ghl } = await syncClientAction(c.ghl_location_id!);
+        done++;
+        if (meta.ok && ghl.ok) ok++; else fail++;
+        if (meta.ok) spend += meta.spend_gbp ?? 0;
+        setSyncAll({ done, total: targets.length, ok, fail, spend });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, targets.length) }, worker));
+  };
+  const syncingAll = !!syncAll && syncAll.done < syncAll.total;
 
   return (
     <div className="space-y-6 p-8">
@@ -38,12 +61,29 @@ export function ClientsView({ clients }: { clients: AdminClientRow[] }) {
           <h1 className="text-3xl font-bold tracking-tight text-fg">Clients</h1>
           <p className="mt-1 text-sm text-fg-muted">Manage client accounts, status and API credentials</p>
         </div>
-        <button
-          onClick={() => setAdding(true)}
-          className="inline-flex items-center gap-2 rounded-lg bg-pink px-3.5 py-2 text-sm font-semibold text-black transition-colors hover:bg-pink-soft"
-        >
-          <Plus size={16} /> Add client
-        </button>
+        <div className="flex items-center gap-2">
+          {syncAll && (
+            <span className={cn('text-xs', syncingAll ? 'text-fg-muted' : syncAll.fail ? 'text-red' : 'text-green')}>
+              {syncingAll
+                ? `Syncing ${syncAll.done}/${syncAll.total}…`
+                : `Synced ${syncAll.ok}/${syncAll.total} · £${syncAll.spend.toFixed(0)}${syncAll.fail ? ` · ${syncAll.fail} failed` : ''}`}
+            </span>
+          )}
+          <button
+            onClick={runSyncAll}
+            disabled={syncingAll}
+            className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-fg-muted transition-colors hover:border-border-strong hover:text-fg disabled:opacity-50"
+            title="Pull Meta ad data now for every eligible active client"
+          >
+            {syncingAll ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} Sync all
+          </button>
+          <button
+            onClick={() => setAdding(true)}
+            className="inline-flex items-center gap-2 rounded-lg bg-pink px-3.5 py-2 text-sm font-semibold text-black transition-colors hover:bg-pink-soft"
+          >
+            <Plus size={16} /> Add client
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -118,12 +158,29 @@ export function ClientsView({ clients }: { clients: AdminClientRow[] }) {
 
 function ClientRowItem({ client: c, onEdit }: { client: AdminClientRow; onEdit: () => void }) {
   const [pending, startTransition] = useTransition();
+  const [syncing, startSync] = useTransition();
+  const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const canSync = !!c.ghl_location_id;
 
   const toggleStatus = () => {
     const next = c.status === 'active' ? 'archived' : 'active';
     if (next === 'archived' && !window.confirm(`Archive "${c.client_name}"? They'll move to the Archived tab and can be restored anytime.`)) return;
     startTransition(async () => {
       await setClientStatusAction(c.id, next);
+    });
+  };
+
+  const doSync = () => {
+    if (!c.ghl_location_id) return;
+    setSyncMsg(null);
+    startSync(async () => {
+      const { meta, ghl } = await syncClientAction(c.ghl_location_id!);
+      const parts = [
+        meta.ok ? `Meta £${(meta.spend_gbp ?? 0).toFixed(0)} · ${meta.lp_views ?? 0} LP` : `Meta failed: ${meta.error ?? '?'}`,
+        ghl.ok ? `GHL ${ghl.contacts ?? 0} contacts · ${ghl.transactions ?? 0} txns` : `GHL failed: ${ghl.error ?? '?'}`,
+      ];
+      setSyncMsg({ ok: meta.ok && ghl.ok, text: parts.join('  ·  ') });
     });
   };
 
@@ -175,6 +232,23 @@ function ClientRowItem({ client: c, onEdit }: { client: AdminClientRow; onEdit: 
       <td className="px-5 py-3.5 text-xs text-fg-muted">{formatDate(c.created_at)}</td>
       <td className="px-5 py-3.5">
         <div className="flex items-center justify-end gap-1">
+          {syncMsg && (
+            <span
+              className={cn('mr-1 max-w-[240px] truncate text-[11px]', syncMsg.ok ? 'text-green' : 'text-red')}
+              title={syncMsg.text}
+            >
+              {syncMsg.text}
+            </span>
+          )}
+          <button
+            onClick={doSync}
+            disabled={syncing || !canSync}
+            className="rounded-md p-1.5 text-fg-muted transition-colors hover:bg-surface hover:text-pink disabled:opacity-40"
+            aria-label="Sync data now"
+            title={canSync ? 'Sync Meta + GHL data now' : 'Needs a GHL location first'}
+          >
+            {syncing ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+          </button>
           <button
             onClick={onEdit}
             className="rounded-md p-1.5 text-fg-muted transition-colors hover:bg-surface hover:text-pink"
