@@ -6,12 +6,11 @@ import { supabaseAdmin } from '@/lib/supabase';
 
 export type ActionState = { ok: boolean; error?: string };
 
-// Logos render at ≤48px, so 256px is plenty even on retina. Downscaling here keeps
-// stored files tiny regardless of how large the source image is.
-const LOGO_MAX_DIMENSION = 256;
+// Logos render at ≤48px, so 128px covers retina. Downscaling keeps the embedded image
+// tiny (~5KB WebP) regardless of the source size.
+const LOGO_MAX_DIMENSION = 128;
 
-const LOGO_BUCKET = 'client-logos';
-const MAX_LOGO_BYTES = 15 * 1024 * 1024; // 15MB
+const MAX_LOGO_BYTES = 15 * 1024 * 1024; // 15MB source cap
 
 // Trim a form field down to a non-empty string, or null.
 function field(fd: FormData, name: string): string | null {
@@ -61,10 +60,10 @@ async function upsertGhlEnrollment(opts: {
   }
 }
 
-// Upload a logo image to Storage and return its public URL. Returns { url: null }
-// when no file was provided so callers can leave the existing logo untouched.
-// Raster images are downscaled to a small PNG; SVGs are kept as-is (they're vector
-// and tiny), so the stored file stays lightweight no matter the source size.
+// Process a logo into a compact data URI stored directly in the DB (clients.logo_url).
+// Embedding the image inline avoids Supabase Storage's CDN propagation delay, which was
+// leaving freshly-uploaded logos showing as broken until a later hard refresh. Returns
+// { url: null } when no file was provided so callers leave the existing logo untouched.
 async function handleLogoUpload(fd: FormData): Promise<{ url: string | null; error?: string }> {
   const logo = fd.get('logo');
   if (!(logo instanceof File) || logo.size === 0) return { url: null };
@@ -73,37 +72,21 @@ async function handleLogoUpload(fd: FormData): Promise<{ url: string | null; err
   if (logo.size > MAX_LOGO_BYTES) return { url: null, error: 'Logo must be under 15MB.' };
 
   const input = Buffer.from(await logo.arrayBuffer());
-  let body: Buffer;
-  let contentType: string;
-  let ext: string;
 
+  // Vectors scale perfectly and are already tiny — embed as-is.
   if (logo.type === 'image/svg+xml') {
-    // Keep vectors untouched — they scale perfectly and are already small.
-    body = input;
-    contentType = 'image/svg+xml';
-    ext = 'svg';
-  } else {
-    try {
-      body = await sharp(input)
-        .resize(LOGO_MAX_DIMENSION, LOGO_MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
-        .png()
-        .toBuffer();
-    } catch {
-      return { url: null, error: 'Could not read that image — please try a different file.' };
-    }
-    contentType = 'image/png';
-    ext = 'png';
+    return { url: `data:image/svg+xml;base64,${input.toString('base64')}` };
   }
 
-  const path = `${crypto.randomUUID()}.${ext}`;
-  const { error } = await supabaseAdmin.storage.from(LOGO_BUCKET).upload(path, body, {
-    contentType,
-    upsert: false,
-  });
-  if (error) return { url: null, error: `Logo upload failed: ${error.message}` };
-
-  const { data } = supabaseAdmin.storage.from(LOGO_BUCKET).getPublicUrl(path);
-  return { url: data.publicUrl };
+  try {
+    const out = await sharp(input)
+      .resize(LOGO_MAX_DIMENSION, LOGO_MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toBuffer();
+    return { url: `data:image/webp;base64,${out.toString('base64')}` };
+  } catch {
+    return { url: null, error: 'Could not read that image — please try a different file.' };
+  }
 }
 
 export async function createClientAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
