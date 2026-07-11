@@ -98,6 +98,12 @@ function matchAdId(metadata: unknown, adIds: Set<string>): string | null {
   return null;
 }
 
+// Canonical form for matching GHL tags and payment-source names against configured
+// values. GHL data frequently carries stray leading/trailing whitespace and mixed case
+// (e.g. "LP - Skin Analysis "), and the admin pickers store a trimmed value — so every
+// comparison MUST normalize both sides through this, or matches silently fail.
+const norm = (s: unknown): string => String(s ?? '').trim().toLowerCase();
+
 function extractAction(actions: unknown, type: string): number {
   if (!actions) return 0;
   let arr: MetaAction[] | null = null;
@@ -290,7 +296,7 @@ export async function getPortfolio(
   for (const r of leadsData) {
     leadsByClient.set(r.location_id, (leadsByClient.get(r.location_id) ?? 0) + 1);
     const tags = Array.isArray(r.tags) ? (r.tags as unknown[]) : [];
-    if (tags.some(t => typeof t === 'string' && t.toLowerCase() === 'booked')) {
+    if (tags.some(t => norm(t) === 'booked')) {
       bookingsByClient.set(r.location_id, (bookingsByClient.get(r.location_id) ?? 0) + 1);
     }
   }
@@ -746,7 +752,7 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
   // GHL "Tag Is [...] AND Created Between [...]" smart list exactly. Deduplicated per
   // contact (a lead who enquires multiple times counts once). Net-new only — a contact
   // created in an earlier period is not re-counted here even if it re-engages.
-  const need = funnel.optin_tags.map(t => t.toLowerCase());
+  const need = funnel.optin_tags.map(norm);
   let optins = 0;
   if (need.length > 0) {
     type ContactRow = { tags: unknown };
@@ -759,7 +765,7 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
         .lte('date_added', `${range.until}T23:59:59Z`),
     );
     for (const c of contacts) {
-      const t = Array.isArray(c.tags) ? c.tags.map(x => String(x).toLowerCase()) : [];
+      const t = Array.isArray(c.tags) ? c.tags.map(norm) : [];
       if (need.every(w => t.includes(w))) optins++;
     }
   }
@@ -775,8 +781,11 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
   //     deposits. Both sets dedupe together per contact.
   let deposits_direct = 0;   // paid on the funnel's own deposit page
   let deposits_setter = 0;   // paid via a setter/phone link, verified by opt-in tags
-  const directSet = new Set(funnel.deposit_sources.map(s => s.toLowerCase()));
-  const setterSet = new Set(funnel.setter_sources.map(s => s.toLowerCase()));
+  // Trim on both sides — GHL payment-link names sometimes carry stray leading/trailing
+  // whitespace (e.g. "LP - Skin Analysis "), and the source picker stores the trimmed
+  // value, so an untrimmed compare would silently miss every matching deposit.
+  const directSet = new Set(funnel.deposit_sources.map(norm));
+  const setterSet = new Set(funnel.setter_sources.map(norm));
   const setterActive = setterSet.size > 0 && need.length > 0;
   if (directSet.size > 0 || setterActive) {
     type TxnRow = { contact_source_id: string | null; entity_source_name: string | null };
@@ -793,7 +802,7 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     const setterPending = new Set<string>();    // setter-source contacts awaiting tag verification
     for (const t of txns) {
       if (!t.contact_source_id) continue;
-      const src = (t.entity_source_name ?? '').toLowerCase();
+      const src = norm(t.entity_source_name);
       if (directSet.has(src)) directCounted.add(t.contact_source_id);
       else if (setterActive && setterSet.has(src)) setterPending.add(t.contact_source_id);
     }
@@ -812,7 +821,7 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
           .in('source_id', toVerify),
       );
       for (const c of contacts) {
-        const t = Array.isArray(c.tags) ? c.tags.map(x => String(x).toLowerCase()) : [];
+        const t = Array.isArray(c.tags) ? c.tags.map(norm) : [];
         if (need.every(w => t.includes(w))) setterCounted.add(c.source_id);
       }
     }
@@ -1048,7 +1057,7 @@ export async function getCampaignExplorer(
     if (!adId) continue;
     ghlLeadsByAd.set(adId, (ghlLeadsByAd.get(adId) ?? 0) + 1);
     const tags = Array.isArray(c.tags) ? (c.tags as unknown[]) : [];
-    if (tags.some(t => typeof t === 'string' && t.toLowerCase() === 'booked')) {
+    if (tags.some(t => norm(t) === 'booked')) {
       bookingsByAd.set(adId, (bookingsByAd.get(adId) ?? 0) + 1);
     }
   }
