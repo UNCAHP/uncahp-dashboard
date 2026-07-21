@@ -13,6 +13,7 @@ import { ClientTableV2 } from '@/components/ClientTableV2';
 import { CampaignExplorer } from '@/components/CampaignExplorer';
 import { PlaceholderView } from '@/components/PlaceholderView';
 import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
+import { CallTrackingView, type CallOverviewRow, type CallDetail } from '@/components/CallTrackingView';
 import { ClientsView } from '@/components/ClientsView';
 import {
   defaultRange, getPortfolio, getCampaignExplorer, getClientList, getFunnelMetrics,
@@ -20,6 +21,7 @@ import {
 } from '@/lib/queries';
 import { getAdminClients } from '@/lib/clientAdmin';
 import { getAdminFunnels } from '@/lib/funnelAdmin';
+import { getCallSummary, getCallActivity } from '@/lib/csrMetrics';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 
@@ -88,6 +90,7 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
   // For Client view, scope to that client. Funnel view uses its own client selector.
   const scopedClient = view === 'client' ? clientFilter : undefined;
   const funnelClientId = view === 'funnel' ? clientFilter : undefined;
+  const callsClient = view === 'calls' ? clientFilter : undefined;
 
   const [{ rows, totals, freshness }, campaigns, adminClients, adminFunnels] = await Promise.all([
     getPortfolio(range, scopedClient),
@@ -110,13 +113,27 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     : [];
   const funnelMetricsList = await Promise.all(funnelsToShow.map(f => getFunnelMetrics(f, range)));
 
+  // Call Tracking. Overview = a light per-client summary card; drilling in (?client=)
+  // computes the full setter breakdown + charts for one client. Only on the calls view.
+  let callsOverview: CallOverviewRow[] = [];
+  let callsDetail: CallDetail | null = null;
+  if (view === 'calls') {
+    const detailClient = callsClient ? clients.find(c => c.client_id === callsClient) : undefined;
+    if (detailClient) {
+      callsDetail = { client: detailClient, activity: await getCallActivity(detailClient.client_id, range) };
+    } else {
+      callsOverview = await Promise.all(clients.map(async c => ({ client: c, summary: await getCallSummary(c.client_id, range) })));
+    }
+  }
+
   const activeClient = scopedClient ? clients.find(c => c.client_id === scopedClient) : null;
+  const callsClientName = callsClient ? clients.find(c => c.client_id === callsClient)?.client_name : null;
 
   const titles: Record<View, { title: string; subtitle: string | null }> = {
     overview: { title: 'Portfolio Overview', subtitle: `${rows.length} clients · ${range.label.toLowerCase()}` },
     client: { title: 'Client View', subtitle: activeClient?.client_name ?? 'No client selected' },
     funnel: { title: 'Funnel Analytics', subtitle: 'Aggregate funnel performance' },
-    calls: { title: 'Call Tracking', subtitle: 'Inbound call performance and recordings' },
+    calls: { title: 'Call Tracking', subtitle: callsClientName ?? 'Speed to Lead across clients' },
     clients: { title: 'Clients', subtitle: 'Manage client accounts and team access' },
     admin: { title: 'Admin Panel', subtitle: 'Team, integrations and workspace settings' },
   };
@@ -130,7 +147,7 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
         since={range.since}
         until={range.until}
         view={view}
-        client={view === 'funnel' ? funnelClientId : scopedClient}
+        client={view === 'funnel' ? funnelClientId : view === 'calls' ? callsClient : scopedClient}
         funnel={funnelFilter}
       />
         {view === 'overview' && <OverviewView rows={rows} totals={totals} rangeDays={rangeDays} since={range.since} until={range.until} />}
@@ -157,7 +174,14 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
             until={range.until}
           />
         )}
-        {view === 'calls' && <PlaceholderView title="Call Tracking" subtitle="Inbound call performance and recordings" />}
+        {view === 'calls' && (
+          <CallTrackingView
+            overview={callsOverview}
+            detail={callsDetail}
+            since={range.since}
+            until={range.until}
+          />
+        )}
         {view === 'clients' && <ClientsView clients={adminClients} />}
         {view === 'admin' && <PlaceholderView title="Admin Panel" subtitle="Team, integrations and workspace settings" />}
     </>

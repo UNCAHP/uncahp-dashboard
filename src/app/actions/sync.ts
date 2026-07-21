@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { syncClientMeta, type MetaSyncResult } from '@/lib/metaSync';
 import { syncClientGhl, type GhlSyncResult } from '@/lib/ghlSync';
+import { syncClientCalls, type CallsSyncResult } from '@/lib/callsSync';
 
 export type ClientSyncResult = { meta: MetaSyncResult; ghl: GhlSyncResult };
 
@@ -16,4 +17,17 @@ export async function syncClientAction(ghlLocationId: string): Promise<ClientSyn
   ]);
   if (meta.ok || ghl.ok) revalidatePath('/');
   return { meta, ghl };
+}
+
+// Pull GHL call events into csr_calls for the Speed-to-Lead KPI. Separate from the
+// Meta/GHL sync because it's slower (walks conversations) and only needed for Call Tracking.
+export async function syncClientCallsAction(ghlLocationId: string, days = 30): Promise<CallsSyncResult> {
+  try {
+    const res = await syncClientCalls(ghlLocationId, days);
+    if (res.ok) revalidatePath('/');
+    return res;
+  } catch (e) {
+    console.error('syncClientCallsAction failed:', e);
+    return { ok: false, error: e instanceof Error ? e.message : 'Unexpected error syncing calls.' };
+  }
 }
