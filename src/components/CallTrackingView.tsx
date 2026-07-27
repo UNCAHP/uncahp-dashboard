@@ -211,7 +211,8 @@ function Detail({ row }: { row: CallDetail }) {
     });
   };
 
-  const topDials = Math.max(1, ...a.setters.map(s => s.dials));
+  // Speed-to-Lead focused leaderboard: rank by leads phoned (volume), not dials.
+  const setters = [...a.setters].sort((x, y) => y.speedLeads - x.speedLeads || y.speedWithin - x.speedWithin);
 
   return (
     <div className="space-y-5">
@@ -249,13 +250,16 @@ function Detail({ row }: { row: CallDetail }) {
             <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-gradient-to-br from-surface-2/40 to-surface p-6">
               <div className="flex items-center gap-1.5 self-start text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
                 <Zap size={13} className="text-pink" /> Speed to Lead
-                <InfoTip text={`Of the new leads that were PHONED (9am–5pm), the % reached within ${SPEED_TO_LEAD_MINUTES} minutes. Leads handled by SMS or the AI agent (no call) are excluded — not a miss. Calls made off GHL aren't seen.`} />
+                <InfoTip text={`Of ALL new leads that came in (10am–6pm UK), the % reached by phone within ${SPEED_TO_LEAD_MINUTES} minutes. A lead never phoned counts as a miss. Calls made off GHL aren't seen.`} />
               </div>
               <Gauge value={a.speed.pct} />
               <span className={cn('rounded-md px-2.5 py-1 text-xs font-semibold', speedTier(a.speed.pct).cls)}>{speedTier(a.speed.pct).label}</span>
               <div className="text-center text-[11px] text-fg-dim">
-                {a.speed.contactedWithin}/{a.speed.phoned} phoned reached ≤{SPEED_TO_LEAD_MINUTES}m
+                {a.speed.contactedWithin}/{a.speed.leadsInHours} leads reached ≤{SPEED_TO_LEAD_MINUTES}m
                 {a.speed.medianMinutes != null && <> · median {a.speed.medianMinutes}m</>}
+              </div>
+              <div className="text-center text-[10px] text-fg-dim">
+                {a.speed.leadsInHours} new leads 10–6 · <span className="text-fg-muted">{a.speed.neverCalled} never phoned</span> (counts as a miss)
               </div>
             </div>
 
@@ -271,8 +275,8 @@ function Detail({ row }: { row: CallDetail }) {
               {a.speed.leadsInHours > 0 && (
                 <div className="rounded-2xl border border-border bg-surface p-5">
                   <div className="mb-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-                    <GaugeIcon size={13} className="text-pink" /> New leads 9am–5pm
-                    <InfoTip text="New leads created in business hours. Speed to Lead is measured only on the ones a setter actually phoned — SMS/AI-handled leads aren't counted as a miss." />
+                    <GaugeIcon size={13} className="text-pink" /> New leads 10am–6pm
+                    <InfoTip text="New leads created in business hours (10am–6pm UK) that have a phone number. Speed to Lead is measured on ALL of them — a lead never phoned counts as a miss. Leads with no number are excluded (they can't be called)." />
                   </div>
                   <LeadSplit leads={a.speed.leadsInHours} phoned={a.speed.phoned} within={a.speed.contactedWithin} />
                 </div>
@@ -284,8 +288,8 @@ function Detail({ row }: { row: CallDetail }) {
           <div className="rounded-2xl border border-border bg-surface p-6">
             <div className="mb-4 flex items-center gap-2">
               <Users size={15} className="text-pink" />
-              <div className="text-sm font-semibold text-fg">Setter leaderboard</div>
-              <span className="text-[11px] text-fg-dim">· ranked by dials</span>
+              <div className="text-sm font-semibold text-fg">Speed to Lead · by setter</div>
+              <span className="text-[11px] text-fg-dim">· ranked by leads phoned</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -293,35 +297,22 @@ function Detail({ row }: { row: CallDetail }) {
                   <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
                     <th className="px-2 py-2 text-left font-semibold">#</th>
                     <th className="px-2 py-2 text-left font-semibold">Setter</th>
-                    <th className="px-2 py-2 text-left font-semibold">Dials</th>
-                    <th className="px-2 py-2 text-right font-semibold">Conv.</th>
-                    <th className="px-2 py-2 text-right font-semibold">Rate</th>
-                    <th className="px-2 py-2 text-right font-semibold">Avg Dur.</th>
-                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Leads <InfoTip text="New leads (9am–5pm) this setter was the FIRST to phone (credited by who called, not assignment). Leads nobody phoned are the 'No phone call' row; the Total is every new lead." /></span></th>
+                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Phoned <InfoTip text="New leads (10am–6pm UK) this setter was the FIRST to phone." /></span></th>
+                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Not phoned <InfoTip text="New leads (10am–6pm UK) that were never phoned. These can't be pinned on a person (leads route to the AI agent), so per-setter shows '—' and the team's total sits in the 'No phone call' row + Total." /></span></th>
                     <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">≤{SPEED_TO_LEAD_MINUTES}m <InfoTip text={`Of the leads this setter phoned, how many within ${SPEED_TO_LEAD_MINUTES} minutes of the enquiry.`} /></span></th>
-                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text="Reached ≤30m ÷ leads phoned. Measured only on leads that got a call — SMS/AI-handled leads are excluded, not counted as a miss." /></span></th>
+                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text="Per setter: reached ≤30m ÷ the leads they phoned. Team total (bottom row) = reached ≤30m ÷ ALL new leads 10am–6pm, so never-phoned leads count as misses there." /></span></th>
                     <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Tier <InfoTip text="Performance level from the speed-to-lead rate — Senior ≥85%, Flat ≥80%, Junior ≥75%, and below 75% is under target." /></span></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {a.setters.map((s, i) => (
+                  {setters.map((s, i) => (
                     <tr key={s.csr} className="border-b border-border/50 last:border-0">
                       <td className="px-2 py-3">
                         <span className={cn('flex h-6 w-6 items-center justify-center rounded-md font-mono text-[11px] font-bold tabular-nums', i === 0 ? 'bg-pink/20 text-pink' : 'bg-surface-2 text-fg-muted')}>{i + 1}</span>
                       </td>
                       <td className="px-2 py-3 font-medium text-fg">{s.csr}</td>
-                      <td className="px-2 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="w-8 shrink-0 text-right font-mono tabular-nums text-pink">{s.dials}</span>
-                          <span className="hidden h-1.5 w-16 overflow-hidden rounded-full bg-surface-2 sm:block">
-                            <span className="block h-full rounded-full bg-pink/60" style={{ width: `${Math.max(4, (s.dials / topDials) * 100)}%` }} />
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-2 py-3 text-right tabular-nums text-green">{s.conversations}</td>
-                      <td className="px-2 py-3 text-right tabular-nums text-fg-muted">{pct(s.convRatePct)}</td>
-                      <td className="px-2 py-3 text-right tabular-nums text-fg-muted">{fmtDuration(s.avgDurationSec)}</td>
-                      <td className="px-2 py-3 text-right tabular-nums text-fg-muted">{s.speedLeads}</td>
+                      <td className="px-2 py-3 text-right tabular-nums text-fg">{s.speedLeads}</td>
+                      <td className="px-2 py-3 text-right tabular-nums text-fg-dim">—</td>
                       <td className="px-2 py-3 text-right tabular-nums text-fg">{s.speedWithin}</td>
                       <td className={cn('px-2 py-3 text-right font-mono font-semibold tabular-nums', speedText(s.speedToLeadPct))}>{pct(s.speedToLeadPct)}</td>
                       <td className="px-2 py-3 text-right">
@@ -334,12 +325,9 @@ function Detail({ row }: { row: CallDetail }) {
                       {a.speed.neverCalled > 0 && (
                         <tr className="border-b border-border/50 text-fg-dim">
                           <td className="px-2 py-3"></td>
-                          <td className="px-2 py-3"><span className="inline-flex items-center gap-1 italic">No phone call <InfoTip text="New leads with no phone call — handled by SMS or the AI agent (or missed). Not part of Speed to Lead, and not counted as a miss." /></span></td>
-                          <td className="px-2 py-3">—</td>
+                          <td className="px-2 py-3"><span className="inline-flex items-center gap-1 italic">No phone call <InfoTip text="New leads (10am–6pm UK) that were never phoned — a miss at the team level. Can't be pinned on a setter (leads route to the AI agent), so they only drag the team Total, not an individual's rate." /></span></td>
                           <td className="px-2 py-3 text-right">—</td>
-                          <td className="px-2 py-3 text-right">—</td>
-                          <td className="px-2 py-3 text-right">—</td>
-                          <td className="px-2 py-3 text-right tabular-nums">{a.speed.neverCalled}</td>
+                          <td className="px-2 py-3 text-right tabular-nums text-red">{a.speed.neverCalled}</td>
                           <td className="px-2 py-3 text-right">—</td>
                           <td className="px-2 py-3 text-right">—</td>
                           <td className="px-2 py-3 text-right">—</td>
@@ -347,21 +335,18 @@ function Detail({ row }: { row: CallDetail }) {
                       )}
                       <tr className="border-t border-border font-semibold text-fg">
                         <td className="px-2 py-3"></td>
-                        <td className="px-2 py-3">Total <span className="font-normal text-fg-dim">· all new leads 9–5</span></td>
-                        <td className="px-2 py-3 tabular-nums text-pink">{a.dials}</td>
-                        <td className="px-2 py-3 text-right tabular-nums text-green">{a.conversations}</td>
-                        <td className="px-2 py-3 text-right tabular-nums">{pct(a.convRatePct)}</td>
-                        <td className="px-2 py-3 text-right tabular-nums">{fmtDuration(a.avgDurationSec)}</td>
-                        <td className="px-2 py-3 text-right tabular-nums">{a.speed.leadsInHours}</td>
+                        <td className="px-2 py-3">Total <span className="font-normal text-fg-dim">· all new leads 10–6</span></td>
+                        <td className="px-2 py-3 text-right tabular-nums">{a.speed.phoned}</td>
+                        <td className="px-2 py-3 text-right tabular-nums">{a.speed.neverCalled}</td>
                         <td className="px-2 py-3 text-right tabular-nums">{a.speed.contactedWithin}</td>
-                        <td className={cn('px-2 py-3 text-right font-mono tabular-nums', speedText(a.speed.pct))} title={`${a.speed.contactedWithin} of ${a.speed.phoned} phoned`}>{pct(a.speed.pct)}</td>
+                        <td className={cn('px-2 py-3 text-right font-mono tabular-nums', speedText(a.speed.pct))} title={`${a.speed.contactedWithin} of ${a.speed.leadsInHours} new leads reached ≤${SPEED_TO_LEAD_MINUTES}m`}>{pct(a.speed.pct)}</td>
                         <td className="px-2 py-3 text-right">
                           <span className={cn('inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold', speedTier(a.speed.pct).cls)}>{speedTier(a.speed.pct).label}</span>
                         </td>
                       </tr>
                     </>
                   )}
-                  {a.setters.length === 0 && a.speed.leadsInHours === 0 && <tr><td colSpan={10} className="px-2 py-6 text-center text-xs text-fg-dim">No call or lead activity in this range.</td></tr>}
+                  {a.setters.length === 0 && a.speed.leadsInHours === 0 && <tr><td colSpan={7} className="px-2 py-6 text-center text-xs text-fg-dim">No call or lead activity in this range.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -445,9 +430,9 @@ function LeadSplit({ leads, phoned, within }: { leads: number; phoned: number; w
     <div className="flex items-end gap-2">
       {seg.map(s => (
         <div key={s.label} className="flex-1">
-          <div className="mb-1 flex items-baseline justify-between gap-1">
-            <span className="truncate text-[10px] font-medium text-fg-muted">{s.label}</span>
+          <div className="mb-1 flex items-baseline gap-1.5">
             <span className={cn('font-mono text-sm font-bold tabular-nums', s.text)}>{formatNumber(s.value)}</span>
+            <span className="truncate text-[10px] font-medium text-fg-muted">{s.label}</span>
           </div>
           <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
             <div className={cn('h-full rounded-full', s.cls)} style={{ width: `${leads ? Math.max(3, (s.value / leads) * 100) : 0}%` }} />

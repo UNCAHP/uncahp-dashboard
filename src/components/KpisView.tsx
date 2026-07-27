@@ -53,7 +53,7 @@ export function KpisView({ rows, months, month }: { rows: CsrKpiRow[]; months: s
                 <th className="px-3 py-2.5 text-left font-semibold">Setter</th>
                 <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Confirmed bookings <InfoTip text="Bookings that paid a booking fee this month. Targets: Junior 60 · Flat 90 · Senior 110." /></span></th>
                 <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Phone booking ratio <InfoTip text="Phone ÷ (Phone + SMS) bookings, from the channel each setter marks. Targets: Junior 60% · Flat 65% · Senior 75%." /></span></th>
-                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text="New leads (9am–5pm) reached by phone within 30 min, of those the setter phoned. Targets: Junior 75% · Flat 80% · Senior 85%." /></span></th>
+                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text="Per setter: reached by phone within 30 min ÷ the leads they phoned (10am–6pm UK). Never-phoned leads count against the team total on Call Tracking, not per person. Targets: Junior 75% · Flat 80% · Senior 85%." /></span></th>
               </tr>
             </thead>
             <tbody>

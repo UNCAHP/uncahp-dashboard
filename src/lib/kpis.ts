@@ -77,7 +77,7 @@ export async function getCsrScorecard(month: string | null): Promise<CsrKpiRow[]
     for (const p of s.perCsr) {
       const r = ensure(p.csr);
       if (!r) continue;
-      r.speedLeads += p.called;
+      r.speedLeads += p.called; // leads this setter phoned
       r.speedWithin += p.within;
     }
   }

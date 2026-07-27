@@ -3,32 +3,36 @@ import type { DateRange } from './queries';
 import { SPEED_TO_LEAD_MINUTES } from './csrConstants';
 
 // ─── Speed to Lead ───────────────────────────────────────────────────────────
-// "% of new leads contacted by phone within 30 min of enquiry (9am–5pm)".
+// "% of ALL new leads contacted by phone within 30 min of enquiry (10am–6pm UK)".
 //
-//   Denominator — leads created in range whose enquiry landed inside business hours
-//                 (09:00–17:00 Europe/London; the clinics are UK-based).
+//   Denominator — every lead created in range whose enquiry landed inside business hours
+//                 (10:00–18:00 Europe/London) AND has a phone number (a lead with no
+//                 number can't be phoned, so it's excluded rather than counted as a miss).
 //   Numerator   — those with an OUTBOUND call logged within 30 minutes of the enquiry.
 //
-// A lead with no call at all stays in the denominator (it's a miss, not an exclusion).
-// Credit goes to whoever actually made the first call (the call carries the CSR), not
-// the assigned user — the assignee often isn't the one who picks the phone up.
+// A lead with no call at all stays in the TEAM denominator and counts as a MISS — the
+// point of the KPI is that every new lead gets a fast phone response. Credit for a hit
+// goes to whoever actually made the first call (the call carries the CSR). Never-phoned
+// leads can't be pinned on a person (leads route to the AI agent, not a setter), so they
+// sit in the "No phone call" bucket and drag the team rate — individual rates are of the
+// leads that setter phoned.
 
-const BUSINESS_START = 9;
-const BUSINESS_END = 17; // exclusive
+const BUSINESS_START = 10;
+const BUSINESS_END = 18; // exclusive (6pm)
 
 export type CsrSpeedRow = {
   csr: string;
-  called: number;      // leads this CSR made the first call to
+  called: number;      // leads this CSR was the first to phone
   within: number;      // ...within the 30-min target
-  pct: number | null;
+  pct: number | null;  // within ÷ called (this setter's phoned leads)
 };
 
 export type SpeedToLead = {
-  leadsInHours: number;      // all new leads created 9am–5pm (context)
-  phoned: number;            // ...of those, how many got a phone call (the rate's denominator)
+  leadsInHours: number;      // all new leads created 10am–6pm (the rate's denominator)
+  phoned: number;            // ...of those, how many got a phone call (context)
   contactedWithin: number;   // ...within the 30-min target (numerator)
-  pct: number | null;        // contactedWithin ÷ phoned — measured on phoned leads only
-  neverCalled: number;       // leads with no phone call (handled by SMS / AI, not a miss)
+  pct: number | null;        // contactedWithin ÷ leadsInHours — measured on ALL new leads
+  neverCalled: number;       // leads with no phone call — a miss at the team level
   medianMinutes: number | null;
   perCsr: CsrSpeedRow[];
   callsOnFile: number;       // rows in csr_calls for this client (0 ⇒ not synced yet)
@@ -56,7 +60,7 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
   const [{ data: leads }, { data: calls }] = await Promise.all([
     supabase
       .from('ghl_contacts')
-      .select('source_id, date_added')
+      .select('source_id, date_added, phone')
       .eq('location_id', clientId)
       .gte('date_added', `${range.since}T00:00:00Z`)
       .lte('date_added', `${range.until}T23:59:59Z`),
@@ -85,12 +89,15 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
 
   for (const l of leads ?? []) {
     if (!l.date_added) continue;
+    // No phone number → can't be a phone-response target, so it's not in the denominator.
+    if (!String((l as { phone?: string | null }).phone ?? '').trim()) continue;
     const h = londonHour(l.date_added);
     if (h < BUSINESS_START || h >= BUSINESS_END) continue; // outside business hours
     leadsInHours++;
 
     const fc = firstCall.get(l.source_id);
-    // Only calls *after* the enquiry count as a response to it.
+    // Only calls *after* the enquiry count as a response to it. A never-phoned lead is a
+    // miss at the team level (it's in leadsInHours) but can't be credited to a person.
     if (!fc || fc.at <= l.date_added) { neverCalled++; continue; }
 
     const mins = (Date.parse(fc.at) - Date.parse(l.date_added)) / 60000;
@@ -105,14 +112,14 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
   deltas.sort((a, b) => a - b);
   const median = deltas.length ? deltas[Math.floor(deltas.length / 2)] : null;
 
-  // The rate is measured only on leads that were actually phoned — leads handled by
-  // SMS / the AI agent (never called) are excluded, not counted as a miss.
+  // The rate is measured on ALL new leads in business hours — a lead never phoned is a
+  // miss (0), not an exclusion. `phoned` / `neverCalled` are kept for context/breakdown.
   const phoned = leadsInHours - neverCalled;
   return {
     leadsInHours,
     phoned,
     contactedWithin,
-    pct: phoned ? +((100 * contactedWithin) / phoned).toFixed(1) : null,
+    pct: leadsInHours ? +((100 * contactedWithin) / leadsInHours).toFixed(1) : null,
     neverCalled,
     medianMinutes: median == null ? null : Math.round(median),
     perCsr: [...perCsr.values()].sort((a, b) => b.called - a.called),
@@ -131,7 +138,7 @@ export type CsrActivityRow = {
   convRatePct: number | null;
   avgDurationSec: number | null;
   speedToLeadPct: number | null;
-  speedLeads: number;   // new leads this setter was first to phone (9–5 window)
+  speedLeads: number;   // new leads this setter was the first to phone (10–6 window)
   speedWithin: number;  // ...of those, contacted within the 30-min target
 };
 export type DailyPoint = { date: string; dials: number; conversations: number };
