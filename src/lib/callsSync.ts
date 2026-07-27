@@ -78,6 +78,12 @@ export async function syncClientCalls(locationId: string, days = 30): Promise<Ca
     const batch = convIds.slice(i, i + CONC);
     const results = await Promise.all(batch.map(convId =>
       get(`${V2}/conversations/${convId}/messages?type=TYPE_CALL`, key)));
+    // Reading a conversation's messages needs its own scope ("View Conversation Messages" /
+    // conversations/message.readonly). A token can pass the conversations *search* above but
+    // still get 401 here — don't swallow it as "no calls", surface it so it's fixable.
+    if (results.some(mj => (mj.statusCode as number) === 401)) {
+      return { ok: false, error: "GHL token is missing the 'View Conversation Messages' scope — add it to this client's Private Integration Token, then sync again." };
+    }
     for (const mj of results) {
       const msgs = ((mj.messages as { messages?: Message[] })?.messages ?? []) as Message[];
       for (const m of msgs) {
