@@ -51,6 +51,17 @@ export function FunnelAnalyticsView({
       })
     : metricsList;
 
+  // Totals across the funnels shown (respects the Active/Inactive tab + search).
+  const sums = filtered.reduce(
+    (a, m) => ({ lp: a.lp + (m.lp_views ?? 0), optins: a.optins + m.optins, deposits: a.deposits + m.deposits }),
+    { lp: 0, optins: 0, deposits: 0 },
+  );
+  // Average opt-in rate = mean of each funnel's opt-in rate (funnels with LP views).
+  const rated = filtered.filter(m => m.optin_rate_pct != null);
+  const avgOptinRate = rated.length
+    ? +(rated.reduce((s, m) => s + (m.optin_rate_pct ?? 0), 0) / rated.length).toFixed(1)
+    : null;
+
   return (
     <div className="space-y-6 p-8">
       <div className="flex items-start justify-between gap-4">
@@ -117,6 +128,12 @@ export function FunnelAnalyticsView({
                 className="w-full rounded-lg border border-border bg-surface py-2 pl-9 pr-3 text-sm text-fg placeholder:text-fg-dim focus:border-border-strong focus:outline-none"
               />
             </div>
+            <div className="ml-auto flex items-center gap-5 rounded-lg border border-border bg-surface px-4 py-1.5">
+              <TotalSum label="LP Views" value={formatNumber(sums.lp)} />
+              <TotalSum label="Opt-ins" value={formatNumber(sums.optins)} />
+              <TotalSum label="Avg Opt-in Rate" value={formatPercent(avgOptinRate)} />
+              <TotalSum label={`${funnelStatus === 'active' ? 'Active' : 'Inactive'} deposits`} value={formatNumber(sums.deposits)} accent />
+            </div>
           </div>
           <Overview metricsList={filtered} clientInfo={clientInfo} status={funnelStatus} onOpen={fid => navigate({ funnel: fid })} />
         </>
@@ -130,6 +147,15 @@ export function FunnelAnalyticsView({
           onClose={() => setEditing(null)}
         />
       )}
+    </div>
+  );
+}
+
+function TotalSum({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="text-center">
+      <div className="text-[9px] font-semibold uppercase tracking-wider text-fg-muted">{label}</div>
+      <div className={cn('mt-0.5 font-mono text-sm font-bold tabular-nums', accent ? 'text-pink' : 'text-fg')}>{value}</div>
     </div>
   );
 }
@@ -380,7 +406,7 @@ function StageCard({
   breakdown?: { label: string; value: number }[];
 }) {
   return (
-    <div className="flex flex-1 flex-col rounded-xl border border-border bg-surface-2/30 p-5">
+    <div className="flex min-w-0 flex-1 flex-col rounded-xl border border-border bg-surface-2/30 p-5">
       <div className="flex items-center gap-2">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2"><Icon size={15} className="text-pink" /></div>
         <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">{label}</span>
