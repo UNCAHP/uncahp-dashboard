@@ -2,19 +2,21 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { LayoutGrid, BarChart3, FlaskConical, Phone, Building2, Shield, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { LayoutGrid, BarChart3, FlaskConical, Phone, CalendarCheck, Target, Building2, Shield, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/Tooltip';
 
-type View = 'overview' | 'client' | 'funnel' | 'calls' | 'clients' | 'admin';
+type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
 
 const NAV: Array<{ id: View; label: string; icon: typeof LayoutGrid }> = [
   { id: 'overview', label: 'Portfolio Overview', icon: LayoutGrid },
   { id: 'client', label: 'Client View', icon: BarChart3 },
   { id: 'funnel', label: 'Funnel Analytics', icon: FlaskConical },
   { id: 'calls', label: 'Call Tracking', icon: Phone },
+  { id: 'bookings', label: 'Bookings', icon: CalendarCheck },
+  { id: 'kpis', label: 'KPIs', icon: Target },
   { id: 'clients', label: 'Clients', icon: Building2 },
   { id: 'admin', label: 'Admin Panel', icon: Shield },
 ];

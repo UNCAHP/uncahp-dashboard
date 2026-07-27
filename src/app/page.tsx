@@ -14,6 +14,11 @@ import { CampaignExplorer } from '@/components/CampaignExplorer';
 import { PlaceholderView } from '@/components/PlaceholderView';
 import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
 import { CallTrackingView, type CallOverviewRow, type CallDetail } from '@/components/CallTrackingView';
+import { BookingsView } from '@/components/BookingsView';
+import { AllBookingsView } from '@/components/AllBookingsView';
+import { KpisView } from '@/components/KpisView';
+import { getBookings, getBookingMonths, getMonthCost, getAllBookings, getAllBookingMonths, type Booking, type BookingMonthCost } from '@/lib/bookingsAdmin';
+import { getCsrScorecard, getKpiMonths, type CsrKpiRow } from '@/lib/kpis';
 import { ClientsView } from '@/components/ClientsView';
 import {
   defaultRange, getPortfolio, getCampaignExplorer, getClientList, getFunnelMetrics,
@@ -28,11 +33,11 @@ import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-type View = 'overview' | 'client' | 'funnel' | 'calls' | 'clients' | 'admin';
-type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string };
+type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
+type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string };
 
 function parseView(v: string | undefined): View {
-  const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'clients', 'admin'];
+  const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
   return (allowed as string[]).includes(v ?? '') ? (v as View) : 'overview';
 }
 
@@ -126,6 +131,41 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     }
   }
 
+  // Bookings — one page. Default = all-clients overview; pick a client to log for it.
+  const bookingSel = view === 'bookings' ? params.client?.trim() : undefined;
+  const bookingsAllMode = !bookingSel || bookingSel === 'all';
+  const bookingsClient = bookingsAllMode ? 'all' : bookingSel!;
+  let bookings: Booking[] = [];
+  let allBookings: Booking[] = [];
+  let bookingMonths: string[] = [];
+  let bookingMonthCost: BookingMonthCost | null = null;
+  let bookingsMonth: string | null = null;
+  if (view === 'bookings') {
+    if (bookingsAllMode) {
+      bookingMonths = await getAllBookingMonths();
+      bookingsMonth = params.month === 'all' ? null : (params.month ?? bookingMonths[0] ?? null);
+      allBookings = await getAllBookings(bookingsMonth);
+    } else {
+      bookingMonths = await getBookingMonths(bookingsClient);
+      bookingsMonth = params.month === 'all' ? null : (params.month ?? bookingMonths[0] ?? null);
+      [bookings, bookingMonthCost] = await Promise.all([
+        getBookings(bookingsClient, bookingsMonth),
+        bookingsMonth ? getMonthCost(bookingsClient, bookingsMonth) : Promise.resolve(null),
+      ]);
+    }
+  }
+  const bookingsClientName = bookingsAllMode ? 'All clients' : (clients.find(c => c.client_id === bookingsClient)?.client_name ?? 'Client');
+
+  // KPIs (consolidated, per-person, cross-client). Month-scoped.
+  let kpiRows: CsrKpiRow[] = [];
+  let kpiMonths: string[] = [];
+  let kpiMonth: string | null = null;
+  if (view === 'kpis') {
+    kpiMonths = await getKpiMonths();
+    kpiMonth = params.month && params.month !== 'all' ? params.month : (kpiMonths[0] ?? null);
+    kpiRows = await getCsrScorecard(kpiMonth);
+  }
+
   const activeClient = scopedClient ? clients.find(c => c.client_id === scopedClient) : null;
   const callsClientName = callsClient ? clients.find(c => c.client_id === callsClient)?.client_name : null;
 
@@ -134,6 +174,8 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     client: { title: 'Client View', subtitle: activeClient?.client_name ?? 'No client selected' },
     funnel: { title: 'Funnel Analytics', subtitle: 'Aggregate funnel performance' },
     calls: { title: 'Call Tracking', subtitle: callsClientName ?? 'Speed to Lead across clients' },
+    bookings: { title: 'Bookings', subtitle: bookingsClientName },
+    kpis: { title: 'KPIs', subtitle: 'Team performance by role' },
     clients: { title: 'Clients', subtitle: 'Manage client accounts and team access' },
     admin: { title: 'Admin Panel', subtitle: 'Team, integrations and workspace settings' },
   };
@@ -182,6 +224,27 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
             until={range.until}
           />
         )}
+        {view === 'bookings' && (
+          bookingsAllMode ? (
+            <AllBookingsView
+              bookings={allBookings}
+              months={bookingMonths}
+              clients={clients}
+              clientId="all"
+              month={bookingsMonth}
+            />
+          ) : (
+            <BookingsView
+              bookings={bookings}
+              months={bookingMonths}
+              monthCost={bookingMonthCost}
+              clients={clients}
+              clientId={bookingsClient}
+              month={bookingsMonth}
+            />
+          )
+        )}
+        {view === 'kpis' && <KpisView rows={kpiRows} months={kpiMonths} month={kpiMonth} />}
         {view === 'clients' && <ClientsView clients={adminClients} />}
         {view === 'admin' && <PlaceholderView title="Admin Panel" subtitle="Team, integrations and workspace settings" />}
     </>
