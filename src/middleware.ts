@@ -5,6 +5,10 @@ export const config = {
 };
 
 export function middleware(req: NextRequest) {
+  // Cron routes authenticate with CRON_SECRET (a Bearer token), not Basic Auth. Let them
+  // through — otherwise Vercel Cron gets 401'd by the site password and never syncs.
+  if (req.nextUrl.pathname.startsWith('/api/cron/')) return NextResponse.next();
+
   const expectedUser = process.env.BASIC_AUTH_USER;
   const expectedPass = process.env.BASIC_AUTH_PASSWORD;
 
