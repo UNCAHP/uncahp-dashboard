@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { headers } from 'next/headers';
 import {
   PoundSterling, Users, TrendingDown, UserCheck, DollarSign, Sparkles,
   Percent, Eye, ShoppingCart,
@@ -17,6 +18,7 @@ import { CallTrackingView, type CallOverviewRow, type CallDetail } from '@/compo
 import { BookingsView } from '@/components/BookingsView';
 import { AllBookingsView } from '@/components/AllBookingsView';
 import { KpisView } from '@/components/KpisView';
+import { getSplitTests, type SplitTest } from '@/lib/splitTests';
 import { getBookings, getBookingMonths, getMonthCost, getAllBookings, getAllBookingMonths, type Booking, type BookingMonthCost } from '@/lib/bookingsAdmin';
 import { getCsrScorecard, getKpiMonths, type CsrKpiRow } from '@/lib/kpis';
 import { ClientsView } from '@/components/ClientsView';
@@ -97,14 +99,32 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
   const funnelClientId = view === 'funnel' ? clientFilter : undefined;
   const callsClient = view === 'calls' ? clientFilter : undefined;
 
-  const [{ rows, totals, freshness }, campaigns, adminClients, adminFunnels] = await Promise.all([
+  const [{ rows, totals, freshness }, campaigns, adminClients, adminFunnels, splitTests] = await Promise.all([
     getPortfolio(range, scopedClient),
     view === 'client' && scopedClient
       ? getCampaignExplorer(scopedClient, range)
       : Promise.resolve([] as CampaignNode[]),
     view === 'clients' ? getAdminClients() : Promise.resolve([]),
     view === 'funnel' ? getAdminFunnels() : Promise.resolve([]),
+    view === 'funnel' ? getSplitTests() : Promise.resolve([] as SplitTest[]),
   ]);
+
+  // Split tests live inside Funnel Analytics — the snippet needs this dashboard's own
+  // origin (where the tracking script is served from). Prefer an explicit TRACKING_ORIGIN
+  // (set in prod) so the pasted snippet always points at the public domain, even when the
+  // dashboard is viewed on localhost; otherwise fall back to the current request host.
+  let splitBaseUrl = '';
+  if (view === 'funnel') {
+    const envOrigin = process.env.TRACKING_ORIGIN?.replace(/\/+$/, '');
+    if (envOrigin) {
+      splitBaseUrl = envOrigin;
+    } else {
+      const h = await headers();
+      const host = h.get('host');
+      const proto = h.get('x-forwarded-proto') ?? 'https';
+      splitBaseUrl = host ? `${proto}://${host}` : '';
+    }
+  }
 
   // Funnel Analytics. Default view = overview of all active funnels (grouped by
   // client, or scoped to the selected client). Drilling into a specific funnel
@@ -210,6 +230,8 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
             clients={clients}
             adminFunnels={adminFunnels}
             metricsList={funnelMetricsList}
+            splitTests={splitTests}
+            baseUrl={splitBaseUrl}
             funnelStatus={funnelStatus}
             selectedFunnelId={selectedFunnel?.id ?? null}
             since={range.since}

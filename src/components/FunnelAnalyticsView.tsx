@@ -2,10 +2,12 @@
 
 import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, MousePointerClick, Landmark, ExternalLink, FlaskConical, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle, Search, Trash2 } from 'lucide-react';
+import { Eye, MousePointerClick, Landmark, ExternalLink, FlaskConical, SplitSquareHorizontal, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle, Search, Trash2 } from 'lucide-react';
 import type { ClientOption, FunnelMetrics } from '@/lib/queries';
 import type { AdminFunnel, FunnelPageLink } from '@/lib/funnelAdmin';
+import type { SplitTest } from '@/lib/splitTests';
 import { FunnelFormModal } from '@/components/FunnelsManager';
+import { SplitTestPanel, TrackingPanel } from '@/components/SplitTestPanel';
 import { setFunnelStatusAction, deleteFunnelAction } from '@/app/actions/funnels';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
@@ -14,6 +16,8 @@ type Props = {
   clients: ClientOption[];
   adminFunnels: AdminFunnel[];
   metricsList: FunnelMetrics[];
+  splitTests: SplitTest[];
+  baseUrl: string;
   funnelStatus: 'active' | 'archived';
   selectedFunnelId: string | null;
   since: string;
@@ -21,14 +25,17 @@ type Props = {
 };
 
 export function FunnelAnalyticsView({
-  clients, adminFunnels, metricsList, funnelStatus, selectedFunnelId, since, until,
+  clients, adminFunnels, metricsList, splitTests, baseUrl, funnelStatus, selectedFunnelId, since, until,
 }: Props) {
   const router = useRouter();
   const [editing, setEditing] = useState<AdminFunnel | 'new' | null>(null);
   const [search, setSearch] = useState('');
 
   const clientInfo = new Map(clients.map(c => [c.client_id, c]));
+  const splitByFunnel = new Map(splitTests.map(t => [t.funnelId, t]));
+  const trackingMode = new Map(splitTests.map(t => [t.funnelId, t.mode]));
   const selectedAdmin = selectedFunnelId ? adminFunnels.find(f => f.id === selectedFunnelId) ?? null : null;
+  const selectedTest = selectedFunnelId ? splitByFunnel.get(selectedFunnelId) ?? null : null;
 
   const navigate = (next: { funnel?: string; fstatus?: 'active' | 'archived' }) => {
     const params = new URLSearchParams();
@@ -104,6 +111,13 @@ export function FunnelAnalyticsView({
             )}
           </div>
           <MetricsPanel metrics={detail} clientName={clientInfo.get(detail.client_id)?.client_name ?? ''} logoUrl={clientInfo.get(detail.client_id)?.logo_url ?? null} />
+          {selectedTest ? (
+            selectedTest.mode === 'test'
+              ? <SplitTestPanel test={selectedTest} baseUrl={baseUrl} />
+              : <TrackingPanel test={selectedTest} baseUrl={baseUrl} metaLpViews={detail?.lp_views ?? null} />
+          ) : selectedAdmin ? (
+            <SplitTestSetupCTA onSetup={() => setEditing(selectedAdmin)} />
+          ) : null}
         </>
       ) : (
         <>
@@ -135,7 +149,7 @@ export function FunnelAnalyticsView({
               <TotalSum label={`${funnelStatus === 'active' ? 'Active' : 'Inactive'} deposits`} value={formatNumber(sums.deposits)} accent />
             </div>
           </div>
-          <Overview metricsList={filtered} clientInfo={clientInfo} status={funnelStatus} onOpen={fid => navigate({ funnel: fid })} />
+          <Overview metricsList={filtered} clientInfo={clientInfo} status={funnelStatus} trackingMode={trackingMode} onOpen={fid => navigate({ funnel: fid })} />
         </>
       )}
 
@@ -144,9 +158,27 @@ export function FunnelAnalyticsView({
           key={editing === 'new' ? 'new' : editing.id}
           initial={editing === 'new' ? null : editing}
           clients={clients}
+          baseUrl={baseUrl}
           onClose={() => setEditing(null)}
         />
       )}
+    </div>
+  );
+}
+
+function SplitTestSetupCTA({ onSetup }: { onSetup: () => void }) {
+  return (
+    <div className="flex flex-col items-start gap-3 rounded-2xl border border-dashed border-border bg-surface p-6 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-pink/10"><SplitSquareHorizontal size={18} className="text-pink" /></div>
+        <div>
+          <div className="text-sm font-semibold text-fg">First-party tracking is off for this funnel</div>
+          <div className="text-xs text-fg-muted">Turn it on for a Meta-independent backup of views, opt-ins &amp; deposits — and optionally run an A/B test. You&apos;ll get a snippet to paste in.</div>
+        </div>
+      </div>
+      <button onClick={onSetup} className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-pink px-3.5 py-2 text-sm font-semibold text-black hover:bg-pink-soft">
+        <SplitSquareHorizontal size={15} /> Set up tracking
+      </button>
     </div>
   );
 }
@@ -200,11 +232,12 @@ function DeleteButton({ funnelId, funnelName, onDone }: { funnelId: string; funn
 // ─── Overview (all funnels, grouped by client) ───────────────────────────────
 
 function Overview({
-  metricsList, clientInfo, status, onOpen,
+  metricsList, clientInfo, status, trackingMode, onOpen,
 }: {
   metricsList: FunnelMetrics[];
   clientInfo: Map<string, ClientOption>;
   status: 'active' | 'archived';
+  trackingMode: Map<string, 'measure' | 'test'>;
   onOpen: (funnelId: string) => void;
 }) {
   if (metricsList.length === 0) {
@@ -228,13 +261,13 @@ function Overview({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {sorted.map(m => (
-        <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} onClick={() => onOpen(m.funnel_id)} />
+        <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} mode={trackingMode.get(m.funnel_id)} onClick={() => onOpen(m.funnel_id)} />
       ))}
     </div>
   );
 }
 
-function FunnelSummaryCard({ m, client, onClick }: { m: FunnelMetrics; client?: ClientOption; onClick: () => void }) {
+function FunnelSummaryCard({ m, client, mode, onClick }: { m: FunnelMetrics; client?: ClientOption; mode?: 'measure' | 'test'; onClick: () => void }) {
   return (
     <button onClick={onClick} className="group flex flex-col rounded-2xl border border-border bg-surface p-5 text-left transition-colors hover:border-border-strong">
       <div className="flex items-start justify-between gap-2">
@@ -249,7 +282,18 @@ function FunnelSummaryCard({ m, client, onClick }: { m: FunnelMetrics; client?: 
           )}
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-fg group-hover:text-pink">{client?.client_name ?? '—'}</div>
-            <div className="mt-0.5 truncate text-[11px] font-medium text-fg-muted">{m.funnel_name}</div>
+            <div className="mt-0.5 flex items-center gap-1.5">
+              <span className="truncate text-[11px] font-medium text-fg-muted">{m.funnel_name}</span>
+              {mode === 'test' ? (
+                <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-green/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-green">
+                  <SplitSquareHorizontal size={9} /> A/B
+                </span>
+              ) : mode === 'measure' ? (
+                <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-pink/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-pink">
+                  Tracked
+                </span>
+              ) : null}
+            </div>
             <div className="mt-0.5 text-[11px] text-fg-dim">
               {m.meta_campaign_count} campaign{m.meta_campaign_count === 1 ? '' : 's'} · {m.pages.length} page{m.pages.length === 1 ? '' : 's'}
             </div>

@@ -9,6 +9,10 @@ export function middleware(req: NextRequest) {
   // through — otherwise Vercel Cron gets 401'd by the site password and never syncs.
   if (req.nextUrl.pathname.startsWith('/api/cron/')) return NextResponse.next();
 
+  // Split-test tracking must be reachable by visitors on the funnel sites (who don't have
+  // the dashboard password). The collector does its own origin/bot checks. Let it through.
+  if (req.nextUrl.pathname.startsWith('/api/track')) return NextResponse.next();
+
   const expectedUser = process.env.BASIC_AUTH_USER;
   const expectedPass = process.env.BASIC_AUTH_PASSWORD;
 

@@ -48,6 +48,74 @@ function parseTags(raw: string | null): string[] {
   }
 }
 
+function slugify(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
+// Tracking config from the form. Two levels:
+//   • first-party tracking ON, no split → single "default" bucket, split_status 'off'.
+//     (backup landing-page-view/opt-in/deposit data, independent of Meta.)
+//   • first-party tracking ON + split test → 2+ variants, split_status running/decided.
+// Off entirely → no track_key.
+function splitFields(fd: FormData): { track_key: string | null; variants: { key: string; label: string }[]; split_status: 'off' | 'running' | 'decided' } {
+  const trackingEnabled = field(fd, 'tracking_enabled') === '1';
+  const splitEnabled = field(fd, 'split_enabled') === '1';
+  const track_key = slugify(field(fd, 'track_key') ?? '');
+
+  const variants: { key: string; label: string }[] = [];
+  try {
+    const arr = JSON.parse(field(fd, 'variants') ?? '[]');
+    if (Array.isArray(arr)) {
+      const seen = new Set<string>();
+      for (const v of arr) {
+        if (!v || typeof v !== 'object') continue;
+        const key = slugify(String((v as Record<string, unknown>).key ?? ''));
+        const label = String((v as Record<string, unknown>).label ?? '').trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        variants.push({ key, label: label || key.toUpperCase() });
+      }
+    }
+  } catch { /* ignore */ }
+
+  if (!trackingEnabled || !track_key) {
+    return { track_key: null, variants: [], split_status: 'off' };
+  }
+  if (splitEnabled && variants.length >= 2) {
+    const statusRaw = field(fd, 'split_status') ?? 'running';
+    const split_status = (['running', 'decided'].includes(statusRaw) ? statusRaw : 'running') as 'running' | 'decided';
+    return { track_key, variants, split_status };
+  }
+  // Tracking only (measure) — one bucket, no test.
+  return { track_key, variants: [{ key: 'default', label: 'All visitors' }], split_status: 'off' };
+}
+
+type SplitCfg = { track_key: string | null; variants: { key: string; label: string }[]; split_status: 'off' | 'running' | 'decided' };
+
+function writeError(error: { message: string } | null): ActionState | null {
+  if (!error) return null;
+  if (/duplicate key|unique/i.test(error.message)) {
+    return { ok: false, error: 'That split-test key is already used by another funnel — pick a different one.' };
+  }
+  return { ok: false, error: error.message };
+}
+
+// Write the funnel with split-test columns; if they don't exist yet (migration 0011 not
+// run), retry without them so normal funnel creation/editing still works.
+const MISSING_COL = /track_key|variants|split_status|schema cache|column/i;
+
+async function insertFunnel(base: Record<string, unknown>, split: SplitCfg): Promise<ActionState | null> {
+  let { error } = await supabaseAdmin.from('funnels').insert({ ...base, ...split });
+  if (error && MISSING_COL.test(error.message)) ({ error } = await supabaseAdmin.from('funnels').insert(base));
+  return writeError(error);
+}
+
+async function updateFunnel(id: string, base: Record<string, unknown>, split: SplitCfg): Promise<ActionState | null> {
+  let { error } = await supabaseAdmin.from('funnels').update({ ...base, ...split }).eq('id', id);
+  if (error && MISSING_COL.test(error.message)) ({ error } = await supabaseAdmin.from('funnels').update(base).eq('id', id));
+  return writeError(error);
+}
+
 export async function createFunnelAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
     const client_id = field(fd, 'client_id');
@@ -55,7 +123,7 @@ export async function createFunnelAction(_prev: ActionState, fd: FormData): Prom
     if (!client_id) return { ok: false, error: 'Pick a client for this funnel.' };
     if (!name) return { ok: false, error: 'Funnel name is required.' };
 
-    const { error } = await supabaseAdmin.from('funnels').insert({
+    const base = {
       client_id,
       name,
       status: 'active',
@@ -65,8 +133,10 @@ export async function createFunnelAction(_prev: ActionState, fd: FormData): Prom
       setter_sources: parseTags(field(fd, 'setter_sources')),
       meta_campaign_ids: parseCsv(field(fd, 'meta_campaign_ids')),
       pages: parsePages(field(fd, 'pages')),
-    });
-    if (error) return { ok: false, error: error.message };
+    };
+    const split = splitFields(fd);
+    const err = await insertFunnel(base, split);
+    if (err) return err;
     revalidatePath('/');
     return { ok: true };
   } catch (e) {
@@ -84,7 +154,7 @@ export async function updateFunnelAction(_prev: ActionState, fd: FormData): Prom
     if (!client_id) return { ok: false, error: 'Pick a client for this funnel.' };
     if (!name) return { ok: false, error: 'Funnel name is required.' };
 
-    const { error } = await supabaseAdmin.from('funnels').update({
+    const base = {
       client_id,
       name,
       optin_tags: parseTags(field(fd, 'optin_tags')),
@@ -93,8 +163,10 @@ export async function updateFunnelAction(_prev: ActionState, fd: FormData): Prom
       setter_sources: parseTags(field(fd, 'setter_sources')),
       meta_campaign_ids: parseCsv(field(fd, 'meta_campaign_ids')),
       pages: parsePages(field(fd, 'pages')),
-    }).eq('id', id);
-    if (error) return { ok: false, error: error.message };
+    };
+    const split = splitFields(fd);
+    const err = await updateFunnel(id, base, split);
+    if (err) return err;
     revalidatePath('/');
     return { ok: true };
   } catch (e) {

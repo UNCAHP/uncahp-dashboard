@@ -1,9 +1,9 @@
 'use client';
 
 import { useActionState, useEffect, useId, useState, useTransition } from 'react';
-import { Plus, X, Loader2, FlaskConical, Trash2, Link2 } from 'lucide-react';
+import { Plus, X, Loader2, FlaskConical, Trash2, Link2, SplitSquareHorizontal, Copy, Check } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
-import type { AdminFunnel, FunnelPageLink, TagOption, CampaignOption, SourceOption } from '@/lib/funnelAdmin';
+import type { AdminFunnel, FunnelPageLink, FunnelVariant, TagOption, CampaignOption, SourceOption } from '@/lib/funnelAdmin';
 import { createFunnelAction, updateFunnelAction, loadFunnelFormData, type ActionState } from '@/app/actions/funnels';
 import { cn } from '@/lib/utils';
 
@@ -18,17 +18,39 @@ const DEFAULT_PAGES: FunnelPageLink[] = [
 ];
 
 export function FunnelFormModal({
-  initial, clients, onClose,
+  initial, clients, baseUrl = '', onClose,
 }: {
   initial: AdminFunnel | null;
   clients: ClientOption[];
+  baseUrl?: string;
   onClose: () => void;
 }) {
   const action = initial ? updateFunnelAction : createFunnelAction;
   const [state, formAction, submitting] = useActionState<ActionState, FormData>(action, { ok: false });
 
   const [clientId, setClientId] = useState(initial?.client_id ?? '');
+  const [name, setName] = useState(initial?.name ?? '');
   const [optinTags, setOptinTags] = useState<string[]>(initial?.optin_tags ?? []);
+
+  // First-party tracking config — optional. "Tracking on" records views/opt-ins/deposits
+  // as a Meta backup; an A/B split test is an optional layer on top (2+ versions).
+  const [trackingEnabled, setTrackingEnabled] = useState(!!initial?.track_key);
+  const [splitEnabled, setSplitEnabled] = useState((initial?.variants?.length ?? 0) >= 2);
+  const [trackKey, setTrackKey] = useState(initial?.track_key ?? '');
+  const [variants, setVariants] = useState<FunnelVariant[]>(
+    initial?.variants && initial.variants.length >= 2 ? initial.variants : [{ key: 'a', label: 'Version A' }, { key: 'b', label: 'Version B' }],
+  );
+  const [splitStatus, setSplitStatus] = useState<'running' | 'decided'>(initial?.split_status === 'decided' ? 'decided' : 'running');
+  const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  const enableTracking = () => {
+    setTrackingEnabled(true);
+    if (!trackKey && name) setTrackKey(slugify(name));
+  };
+  const setVariant = (i: number, patch: Partial<FunnelVariant>) => setVariants(vs => vs.map((v, j) => (j === i ? { ...v, ...patch } : v)));
+  const addVariant = () => setVariants(vs => [...vs, { key: '', label: '' }]);
+  const removeVariant = (i: number) => setVariants(vs => vs.filter((_, j) => j !== i));
+  const variantsSerialized = JSON.stringify(variants.map((v, i) => ({ key: v.key || String.fromCharCode(97 + i), label: v.label })));
+
   const [depositTags] = useState<string[]>(initial?.deposit_tags ?? []); // preserved, no longer edited
   const [depositSources, setDepositSources] = useState<string[]>(initial?.deposit_sources ?? []);
   const [setterSources, setSetterSources] = useState<string[]>(initial?.setter_sources ?? []);
@@ -74,6 +96,11 @@ export function FunnelFormModal({
         <input type="hidden" name="setter_sources" value={JSON.stringify(setterSources)} />
         <input type="hidden" name="meta_campaign_ids" value={campaignIds.join(',')} />
         <input type="hidden" name="pages" value={JSON.stringify(pages)} />
+        <input type="hidden" name="tracking_enabled" value={trackingEnabled ? '1' : ''} />
+        <input type="hidden" name="split_enabled" value={splitEnabled ? '1' : ''} />
+        <input type="hidden" name="track_key" value={trackKey} />
+        <input type="hidden" name="variants" value={variantsSerialized} />
+        <input type="hidden" name="split_status" value={splitStatus} />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Client" required>
@@ -83,7 +110,7 @@ export function FunnelFormModal({
             </select>
           </Field>
           <Field label="Funnel name" required>
-            <input name="name" defaultValue={initial?.name ?? ''} required placeholder="e.g. HIFU £99 Offer" className={inputCls} />
+            <input name="name" value={name} onChange={e => setName(e.target.value)} required placeholder="e.g. HIFU £99 Offer" className={inputCls} />
           </Field>
         </div>
 
@@ -137,6 +164,72 @@ export function FunnelFormModal({
           </div>
         </Field>
 
+        <div className="rounded-lg border border-border bg-bg/40 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-pink/10"><SplitSquareHorizontal size={15} className="text-pink" /></div>
+              <div>
+                <div className="text-sm font-medium text-fg">First-party tracking</div>
+                <div className="text-[11px] text-fg-dim">Record this funnel&apos;s views, opt-ins &amp; deposits directly — a backup to Meta you can switch to later.</div>
+              </div>
+            </div>
+            {!trackingEnabled ? (
+              <button type="button" onClick={enableTracking} className="shrink-0 rounded-lg border border-pink/40 bg-pink/10 px-3 py-1.5 text-xs font-semibold text-pink hover:bg-pink/15">
+                Set up tracking
+              </button>
+            ) : (
+              <button type="button" onClick={() => { setTrackingEnabled(false); setSplitEnabled(false); }} className="shrink-0 text-xs font-medium text-fg-dim hover:text-red">Turn off</button>
+            )}
+          </div>
+
+          {trackingEnabled && (
+            <div className="mt-4 space-y-3 border-t border-border pt-4">
+              <Field label="Tracking key" hint="Used in the snippet — letters, numbers and dashes.">
+                <input value={trackKey} onChange={e => setTrackKey(slugify(e.target.value))} placeholder="e.g. salon-house-hifu" className={cn(inputCls, 'font-mono')} />
+              </Field>
+
+              <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-bg px-3 py-2.5">
+                <input type="checkbox" checked={splitEnabled} onChange={e => setSplitEnabled(e.target.checked)} className="accent-pink" />
+                <span className="text-xs font-medium text-fg">Run an A/B split test on this funnel</span>
+                <span className="ml-auto text-[10px] text-fg-dim">optional</span>
+              </label>
+
+              {splitEnabled && (
+                <div className="space-y-3 rounded-lg border border-border bg-bg/60 p-3">
+                  <div>
+                    <div className="mb-1.5 text-xs font-medium text-fg">Versions</div>
+                    <div className="space-y-2">
+                      {variants.map((v, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <input value={v.key} onChange={e => setVariant(i, { key: slugify(e.target.value) })} placeholder={String.fromCharCode(97 + i)} className={cn(inputCls, 'w-16 text-center font-mono')} aria-label="Version key" />
+                          <input value={v.label} onChange={e => setVariant(i, { label: e.target.value })} placeholder="e.g. Green button headline" className={cn(inputCls, 'flex-1')} aria-label="Version label" />
+                          {variants.length > 2 && (
+                            <button type="button" onClick={() => removeVariant(i)} className="shrink-0 rounded-md p-2 text-fg-muted hover:text-red" aria-label="Remove version"><X size={15} /></button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <button type="button" onClick={addVariant} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-pink hover:opacity-80"><Plus size={13} /> Add version</button>
+                  </div>
+                  <Field label="Status">
+                    <select value={splitStatus} onChange={e => setSplitStatus(e.target.value as 'running' | 'decided')} className={inputCls}>
+                      <option value="running">Running</option>
+                      <option value="decided">Decided</option>
+                    </select>
+                  </Field>
+                </div>
+              )}
+
+              <SnippetPreview
+                baseUrl={baseUrl}
+                trackKey={trackKey}
+                variantKeys={splitEnabled ? variants.map((v, i) => v.key || String.fromCharCode(97 + i)) : ['default']}
+                split={splitEnabled}
+              />
+            </div>
+          )}
+        </div>
+
         {state.error && <div className="rounded-lg border border-red/30 bg-red/10 px-3 py-2 text-xs text-red">{state.error}</div>}
 
         <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
@@ -148,6 +241,52 @@ export function FunnelFormModal({
         </div>
       </form>
     </Modal>
+  );
+}
+
+// Live-generated tracking script for the split test — shown as the user fills the form
+// so they can copy it straight away (also appears on the funnel's Split Test panel later).
+function SnippetPreview({ baseUrl, trackKey, variantKeys, split }: { baseUrl: string; trackKey: string; variantKeys: string[]; split: boolean }) {
+  const origin = baseUrl || 'https://your-dashboard';
+  const key = trackKey || 'your-tracking-key';
+  const ready = !!trackKey;
+  const config = `const UNCAHP_TRACK_URL = '${origin}/api/track';\nconst UNCAHP_TRACK_KEY  = '${key}';\nconst UNCAHP_VARIANTS   = [${variantKeys.map(k => `'${k}'`).join(', ')}];`;
+  return (
+    <div className="space-y-3">
+      <CopyRow
+        title="Funnel config"
+        snippet={config}
+        ready={ready}
+        hint={split
+          ? <>Add to the funnel&apos;s constants block. Claude wires the view / opt-in / deposit tracking and renders each version via <code className="rounded bg-bg px-1 font-mono">uncahpVariant()</code> from the funnel-builder spec.</>
+          : <>Add to the funnel&apos;s constants block. Claude wires the view / opt-in / deposit tracking from the funnel-builder spec.</>}
+      />
+      {!ready && <p className="text-[11px] text-fg-dim">Enter a tracking key above to finish the config.</p>}
+    </div>
+  );
+}
+
+function CopyRow({ title, snippet, hint, ready }: { title: string; snippet: string; hint: React.ReactNode; ready: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(snippet); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
+  };
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-xs font-medium text-fg">{title}</span>
+        <button
+          type="button"
+          onClick={copy}
+          disabled={!ready}
+          className="inline-flex items-center gap-1.5 rounded-md bg-pink px-2.5 py-1 text-[11px] font-semibold text-black hover:bg-pink-soft disabled:opacity-40"
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <code className="block overflow-x-auto whitespace-pre rounded-lg border border-border bg-bg px-2.5 py-2 font-mono text-[11px] text-fg-muted">{snippet}</code>
+      <p className="mt-1.5 text-[11px] text-fg-dim">{hint}</p>
+    </div>
   );
 }
 

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from './supabase';
 
 export type FunnelPageLink = { name: string; url: string };
+export type FunnelVariant = { key: string; label: string };
 
 export type AdminFunnel = {
   id: string;
@@ -13,6 +14,10 @@ export type AdminFunnel = {
   setter_sources: string[];  // shared setter/phone payment sources; counted only when the contact has ALL opt-in tags
   meta_campaign_ids: string[];
   pages: FunnelPageLink[];
+  // Split test (A/B). track_key is the snippet's data-funnel slug; empty = no test set up.
+  track_key: string | null;
+  variants: FunnelVariant[];
+  split_status: 'off' | 'running' | 'decided';
   created_at: string;
   archived_at: string | null;
 };
@@ -25,13 +30,31 @@ function normalizePages(raw: unknown): FunnelPageLink[] {
     .filter(p => p.name || p.url);
 }
 
+export function normalizeVariants(raw: unknown): FunnelVariant[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((v): v is Record<string, unknown> => !!v && typeof v === 'object')
+    .map(v => ({ key: String(v.key ?? '').trim(), label: String(v.label ?? '').trim() }))
+    .filter(v => v.key)
+    .map(v => ({ key: v.key, label: v.label || v.key.toUpperCase() }));
+}
+
 export async function getAdminFunnels(): Promise<AdminFunnel[]> {
-  const { data, error } = await supabaseAdmin
-    .from('funnels')
-    .select('id, client_id, name, status, optin_tags, deposit_tags, deposit_sources, setter_sources, meta_campaign_ids, pages, created_at, archived_at')
-    .order('status', { ascending: true })
-    .order('name', { ascending: true });
-  if (error) throw error;
+  const withSplit = 'id, client_id, name, status, optin_tags, deposit_tags, deposit_sources, setter_sources, meta_campaign_ids, pages, track_key, variants, split_status, created_at, archived_at';
+  const base = 'id, client_id, name, status, optin_tags, deposit_tags, deposit_sources, setter_sources, meta_campaign_ids, pages, created_at, archived_at';
+  const first = await supabaseAdmin
+    .from('funnels').select(withSplit)
+    .order('status', { ascending: true }).order('name', { ascending: true });
+  let data = first.data;
+  // Before migration 0011 the split columns don't exist — fall back to the base columns
+  // so the funnel page keeps working (funnels just show no test until the migration runs).
+  if (first.error) {
+    const fb = await supabaseAdmin
+      .from('funnels').select(base)
+      .order('status', { ascending: true }).order('name', { ascending: true });
+    if (fb.error) throw fb.error;
+    data = fb.data as typeof data;
+  }
   return (data ?? []).map(r => ({
     id: r.id,
     client_id: r.client_id,
@@ -43,6 +66,11 @@ export async function getAdminFunnels(): Promise<AdminFunnel[]> {
     setter_sources: Array.isArray(r.setter_sources) ? r.setter_sources : [],
     meta_campaign_ids: Array.isArray(r.meta_campaign_ids) ? r.meta_campaign_ids : [],
     pages: normalizePages(r.pages),
+    track_key: (r as { track_key?: string | null }).track_key ?? null,
+    variants: normalizeVariants((r as { variants?: unknown }).variants),
+    split_status: (['running', 'decided'].includes(String((r as { split_status?: string }).split_status))
+      ? (r as { split_status?: string }).split_status
+      : 'off') as 'off' | 'running' | 'decided',
     created_at: r.created_at,
     archived_at: r.archived_at ?? null,
   }));
