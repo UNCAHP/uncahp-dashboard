@@ -5,7 +5,9 @@ import { syncClientCalls, type CallsSyncResult } from '@/lib/callsSync';
 // Syncs ONE client's Meta ads + GHL contacts/transactions + recent calls — all together.
 // Invoked (fanned out) by the daily dispatcher, one invocation per client, so each gets
 // its own function budget + rate-limit bucket and a slow client can't stall the others.
-export const maxDuration = 300;
+// 800s (Vercel Pro / Fluid Compute) so a high-volume client's calls sweep finishes in one
+// pass instead of hitting the limit and catching up over subsequent daily runs.
+export const maxDuration = 800;
 export const dynamic = 'force-dynamic';
 
 const CALLS_WINDOW_DAYS = 3; // calls use a short rolling window; Meta/GHL pull their own ranges

@@ -39,12 +39,12 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 // "missing View Conversation Messages scope" and the client's calls are wrongly skipped.
 async function getMessages(url: string, key: string): Promise<Record<string, unknown>> {
   let j: Record<string, unknown> = {};
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     j = await get(url, key);
     if ((j.statusCode as number) !== 401) return j;
-    await sleep(400 * (attempt + 1));
+    if (attempt < 2) await sleep(250 * (attempt + 1)); // 250ms, 500ms — quick retries, ~0.75s max
   }
-  return j; // still 401 after retries → caller can treat it as a genuine scope gap
+  return j; // still 401 after 3 tries → caller can treat it as a genuine scope gap
 }
 
 export async function syncClientCalls(locationId: string, days = 30): Promise<CallsSyncResult> {
