@@ -27,17 +27,19 @@ export async function GET(req: Request) {
   const results = await Promise.all(locs.map(async l => {
     try {
       const r = await fetch(`${origin}/api/cron/sync-client?loc=${encodeURIComponent(l.id)}`, { headers: authHeaders });
-      const j = (await r.json()) as { ok?: boolean; error?: string };
-      return { client: l.name, ok: !!j.ok, error: j.error };
+      const text = await r.text();
+      let j: { ok?: boolean; error?: string; meta?: { error?: string }; ghl?: { error?: string }; calls?: { error?: string } } | null = null;
+      try { j = JSON.parse(text); } catch { /* non-JSON = auth wall / protection page, not our route */ }
+      if (!j) return { client: l.name, ok: false, error: `non-JSON ${r.status}: ${text.slice(0, 140)}` };
+      return { client: l.name, ok: !!j.ok, error: j.error ?? null, meta: j.meta?.error ?? null, ghl: j.ghl?.error ?? null, calls: j.calls?.error ?? null };
     } catch (e) {
       return { client: l.name, ok: false, error: e instanceof Error ? e.message : 'dispatch error' };
     }
   }));
 
-  return Response.json({
-    ok: true,
-    clients: locs.length,
-    succeeded: results.filter(r => r.ok).length,
-    results,
-  });
+  // Surface the full per-client / per-source outcome in the Vercel logs so failures are
+  // diagnosable (the route otherwise returns 200 even when every inner sync errored).
+  const summary = { origin, clients: locs.length, succeeded: results.filter(r => r.ok).length, results };
+  console.log('[cron] sync summary:', JSON.stringify(summary));
+  return Response.json({ ok: true, ...summary });
 }
