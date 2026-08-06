@@ -723,7 +723,8 @@ export type FunnelMetrics = {
   deposits_direct: number;        // paid on the funnel's own deposit page
   deposits_setter: number;        // paid via a setter/phone link, opt-in-tag verified
   optin_rate_pct: number | null;   // opt-ins ÷ LP views
-  deposit_rate_pct: number | null; // deposits ÷ opt-ins
+  deposit_rate_pct: number | null; // ALL deposits ÷ opt-ins (shown as "Conversion rate")
+  deposit_rate_direct_pct: number | null; // funnel-direct deposits only ÷ opt-ins (excludes phone/setter)
   pages: FunnelPageLink[];
   optin_tags: string[];
   deposit_tags: string[];
@@ -842,6 +843,7 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     deposits_setter,
     optin_rate_pct: rate(optins, lp_views),
     deposit_rate_pct: rate(deposits, optins),
+    deposit_rate_direct_pct: rate(deposits_direct, optins),
     pages: funnel.pages,
     optin_tags: funnel.optin_tags,
     deposit_tags: funnel.deposit_tags,

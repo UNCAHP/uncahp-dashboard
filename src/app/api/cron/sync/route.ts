@@ -15,7 +15,13 @@ export async function GET(req: Request) {
   }
 
   const origin = new URL(req.url).origin;
-  const authHeaders: HeadersInit = { authorization: `Bearer ${secret}` };
+  // The dispatcher fans out by calling its own deployment over HTTP. If Vercel Deployment
+  // Protection is on, that self-call hits the auth wall and returns a login page instead of
+  // JSON — so every client "fails". Carry the automation-bypass secret (auto-populated when
+  // "Protection Bypass for Automation" is enabled) so the internal calls skip the wall.
+  const authHeaders: Record<string, string> = { authorization: `Bearer ${secret}` };
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  if (bypass) authHeaders['x-vercel-protection-bypass'] = bypass;
 
   const { data: keys } = await supabaseAdmin
     .from('ghl_api_keys')

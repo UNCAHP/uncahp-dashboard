@@ -306,13 +306,17 @@ function FunnelSummaryCard({ m, client, mode, onClick }: { m: FunnelMetrics; cli
         <Mini label="Opt-ins" value={formatNumber(m.optins)} />
         <Mini label="Deposits" value={formatNumber(m.deposits)} accent />
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-3 border-t border-border/60 pt-3">
+      <div className="mt-3 grid grid-cols-3 gap-3 border-t border-border/60 pt-3">
         <div>
           <div className="text-[9px] font-semibold uppercase tracking-wider text-fg-muted">Opt-in rate</div>
           <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-fg">{formatPercent(m.optin_rate_pct)}</div>
         </div>
         <div>
           <div className="text-[9px] font-semibold uppercase tracking-wider text-fg-muted">Deposit rate</div>
+          <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-fg">{formatPercent(m.deposit_rate_direct_pct)}</div>
+        </div>
+        <div>
+          <div className="text-[9px] font-semibold uppercase tracking-wider text-fg-muted">Conversion rate</div>
           <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-pink">{formatPercent(m.deposit_rate_pct)}</div>
         </div>
       </div>
@@ -363,12 +367,14 @@ function MetricsPanel({ metrics: m, clientName, logoUrl }: { metrics: FunnelMetr
             <p className="text-xs text-fg-muted">{clientName}</p>
           </div>
         </div>
-        <div className="flex items-center gap-5 sm:gap-7">
+        <div className="flex flex-wrap items-center gap-5 sm:gap-7">
           <Headline label="Deposits" value={m.deposits == null ? '—' : formatNumber(m.deposits)} />
           <div className="h-10 w-px bg-border" />
           <Headline label="Opt-in rate" value={formatPercent(m.optin_rate_pct)} />
           <div className="h-10 w-px bg-border" />
-          <Headline label="Deposit rate" value={formatPercent(m.deposit_rate_pct)} accent />
+          <Headline label="Deposit rate" value={formatPercent(m.deposit_rate_direct_pct)} />
+          <div className="h-10 w-px bg-border" />
+          <Headline label="Conversion rate" value={formatPercent(m.deposit_rate_pct)} accent />
         </div>
       </div>
 
