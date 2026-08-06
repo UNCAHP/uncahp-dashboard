@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  // Site icons are public by nature and get requested by browsers/crawlers that have no
+  // password. Exempt every path they're fetched from, otherwise each one shows up in the
+  // Vercel logs as a warning-level 401.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|favicon.png|icon.png|apple-icon.png).*)'],
 };
 
 export function middleware(req: NextRequest) {
