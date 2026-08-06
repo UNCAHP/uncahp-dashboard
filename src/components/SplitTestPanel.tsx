@@ -1,43 +1,96 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import { Trophy, Copy, Check, SplitSquareHorizontal, Info, Radio } from 'lucide-react';
-import { setSplitTestStatus } from '@/app/actions/splitTests';
+import { Trophy, Copy, Check, SplitSquareHorizontal, Info, Radio, Gauge, Hourglass } from 'lucide-react';
+import { setSplitTestStatus, declareSplitWinner, reopenSplitTest } from '@/app/actions/splitTests';
 import type { SplitTest, VariantStat } from '@/lib/splitTests';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
 
-// The Split Test panel shown on a funnel's detail view: the snippet to paste, the live
-// status control, and the per-version scoreboard with a "can you call it yet?" read.
+// The Split Test panel shown on a funnel's detail view: a verdict + confidence-to-95%
+// read, a head-to-head of each version as its own funnel, and the config to paste.
 export function SplitTestPanel({ test, baseUrl }: { test: SplitTest; baseUrl: string }) {
-  const metricLabel = test.primaryMetric === 'deposit' ? 'deposit' : 'opt-in';
+  const primaryLabel = test.primaryMetric === 'deposit' ? 'deposit' : 'opt-in';
   const leader = test.variants.find(v => v.key === test.leaderKey);
-  const maxRate = Math.max(
-    ...test.variants.map(v => (test.primaryMetric === 'deposit' ? v.depositRate : v.optinRate) ?? 0),
-    0.0001,
-  );
+  const winner = test.winnerKey ? test.variants.find(v => v.key === test.winnerKey) : undefined;
+  const decided = test.status === 'decided' && !!winner;
+  const hasData = test.totalViews > 0;
 
   return (
     <div className="rounded-2xl border border-border bg-surface p-6">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pink/10"><SplitSquareHorizontal size={16} className="text-pink" /></div>
           <div>
             <div className="text-sm font-semibold text-fg">Split test</div>
-            <div className="text-[11px] text-fg-dim">{formatNumber(test.totalViews)} visitors · comparing {metricLabel} rate</div>
+            <div className="text-[11px] text-fg-dim">{decided
+              ? 'Winner declared'
+              : `${formatNumber(test.totalViews)} ${test.totalViews === 1 ? 'visitor' : 'visitors'} · comparing ${primaryLabel} rate`}</div>
           </div>
         </div>
-        <StatusControl funnelId={test.funnelId} status={test.status} />
+        {decided ? <DecidedControl funnelId={test.funnelId} /> : <StatusControl funnelId={test.funnelId} status={test.status} />}
       </div>
 
-      <CallBanner test={test} leader={leader} metricLabel={metricLabel} />
+      {decided && winner ? (
+        <DecidedFlow test={test} winner={winner} primaryLabel={primaryLabel} />
+      ) : hasData ? (
+        <>
+          <Verdict test={test} leader={leader} primaryLabel={primaryLabel} />
+          <div className={cn('mt-4 grid gap-3', test.variants.length > 2 ? 'sm:grid-cols-2 lg:grid-cols-3' : 'sm:grid-cols-2')}>
+            {test.variants.map(v => (
+              <VersionColumn
+                key={v.key}
+                v={v}
+                funnelId={test.funnelId}
+                primaryMetric={test.primaryMetric}
+                isWinner={test.callable && v.key === test.leaderKey}
+                isLeader={!test.callable && v.key === test.leaderKey && !!test.runnerUpKey}
+                recommended={!!test.leaderKey && v.key === test.leaderKey}
+              />
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="rounded-xl border border-dashed border-border bg-bg px-6 py-9 text-center">
+          <Hourglass size={22} className="mx-auto mb-2 text-fg-dim" />
+          <div className="text-sm font-medium text-fg">Waiting for the first visitors</div>
+          <p className="mx-auto mt-1 max-w-sm text-xs text-fg-muted">Add the config below to your funnel. As soon as people land, each version&apos;s funnel appears here.</p>
+        </div>
+      )}
 
-      <div className="mt-4 space-y-2.5">
-        {test.variants.map(v => (
-          <VariantRow key={v.key} v={v} metric={test.primaryMetric} maxRate={maxRate} isLeader={v.key === test.leaderKey && test.callable} />
-        ))}
+      <SnippetBar baseUrl={baseUrl} trackKey={test.trackKey} variantKeys={decided ? ['default'] : test.variants.map(v => v.key)} split={!decided} />
+    </div>
+  );
+}
+
+// After a winner is called: the funnel collapses back to a single flow for the winning version.
+function DecidedFlow({ test, winner, primaryLabel }: { test: SplitTest; winner: VariantStat; primaryLabel: string }) {
+  const heroRate = test.primaryMetric === 'deposit' ? winner.depositRate : winner.optinRate;
+  return (
+    <div>
+      <div className="rounded-xl border border-green/40 bg-green/10 p-4">
+        <div className="flex items-start gap-3">
+          <Trophy size={18} className="mt-px shrink-0 text-green" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm text-green"><span className="font-bold">{winner.label} won</span></div>
+            <div className="mt-0.5 text-xs text-green/90">
+              {test.upliftPct != null && test.upliftPct > 0 ? <>{formatPercent(test.upliftPct, 0)} higher {primaryLabel} rate · </> : null}
+              this version is your funnel now
+            </div>
+          </div>
+        </div>
       </div>
 
-      <SnippetBar baseUrl={baseUrl} trackKey={test.trackKey} variantKeys={test.variants.map(v => v.key)} split />
+      <div className="mt-4 rounded-xl border border-border bg-bg p-4">
+        <div className="flex items-baseline gap-1.5">
+          <span className="font-mono text-3xl font-bold tabular-nums text-fg">{heroRate != null ? formatPercent(heroRate * 100, 1) : '—'}</span>
+          <span className="text-[11px] text-fg-dim">{primaryLabel} rate · {winner.label}</span>
+        </div>
+        <div className="mt-4 grid grid-cols-3 divide-x divide-border rounded-lg border border-border">
+          <StageStat label="Views" value={winner.views} />
+          <StageStat label="Opt-ins" value={winner.optins} rate={winner.optinRate} />
+          <StageStat label="Deposits" value={winner.deposits} rate={winner.depositRate} accent="pink" />
+        </div>
+      </div>
     </div>
   );
 }
@@ -87,107 +140,172 @@ function Stat({ label, value, sub, accent }: { label: string; value: string; sub
   );
 }
 
-function CallBanner({ test, leader, metricLabel }: { test: SplitTest; leader?: VariantStat; metricLabel: string }) {
-  if (test.totalViews === 0) {
-    return <Banner tone="neutral" icon={<Info size={16} className="shrink-0" />}>No visitors yet. Paste the snippet below into this funnel and results appear here automatically.</Banner>;
-  }
-  if (test.callable && leader) {
-    return (
-      <Banner tone="good" icon={<Trophy size={16} className="shrink-0" />}>
-        <span className="font-semibold">{leader.label} wins.</span>{' '}
-        {formatPercent(test.confidencePct, 0)} confident
-        {test.upliftPct != null && test.upliftPct > 0 && <> · {formatPercent(test.upliftPct, 0)} higher {metricLabel} rate</>}
-        {' '}— safe to call it.
-      </Banner>
-    );
-  }
-  if (test.leaderKey && test.runnerUpKey) {
-    return (
-      <Banner tone="warn">
-        <span className="font-semibold">Too close to call.</span>{' '}
-        {test.confidencePct != null ? <>{formatPercent(test.confidencePct, 0)} confident so far — </> : null}
-        keep it running until you reach 95% confidence with at least ~30 visitors per version.
-      </Banner>
-    );
-  }
-  return <Banner tone="neutral" icon={<Info size={16} className="shrink-0" />}>Only one version has traffic so far — give it time to split.</Banner>;
-}
+type Tone = 'green' | 'yellow' | 'muted';
 
-function Banner({ tone, icon, children }: { tone: 'good' | 'warn' | 'neutral'; icon?: ReactNode; children: ReactNode }) {
-  const styles = {
-    good: 'border-green/40 bg-green/10 text-green',
-    warn: 'border-yellow/40 bg-yellow/10 text-yellow',
-    neutral: 'border-border bg-bg text-fg-muted',
-  }[tone];
+// The headline read: winner / too close / gathering, plus a meter showing how far the
+// confidence is from the 95% needed to call it.
+function Verdict({ test, leader, primaryLabel }: { test: SplitTest; leader?: VariantStat; primaryLabel: string }) {
+  const state: 'won' | 'running' | 'gathering' =
+    test.callable ? 'won' : (test.leaderKey && test.runnerUpKey) ? 'running' : 'gathering';
+  const tone: Tone = state === 'won' ? 'green' : state === 'running' ? 'yellow' : 'muted';
+  const Icon = state === 'won' ? Trophy : state === 'running' ? Gauge : Hourglass;
+
+  const box = { green: 'border-green/40 bg-green/10', yellow: 'border-yellow/40 bg-yellow/10', muted: 'border-border bg-bg' }[tone];
+  const head = { green: 'text-green', yellow: 'text-yellow', muted: 'text-fg' }[tone];
+  const subC = { green: 'text-green/90', yellow: 'text-yellow/90', muted: 'text-fg-muted' }[tone];
+
+  let headline: ReactNode, sub: ReactNode;
+  if (state === 'won' && leader) {
+    headline = <><span className="font-bold">{leader.label}</span> wins</>;
+    sub = <>{test.upliftPct != null && test.upliftPct > 0 ? <>{formatPercent(test.upliftPct, 0)} higher {primaryLabel} rate · </> : null}safe to call it now</>;
+  } else if (state === 'running') {
+    headline = <span className="font-bold">Too close to call</span>;
+    sub = <>{leader ? <><span className="font-medium">{leader.label}</span> is ahead, but not yet certain — </> : null}keep it running</>;
+  } else {
+    headline = <span className="font-bold">Gathering data</span>;
+    sub = <>Needs visits on both versions before a winner can show</>;
+  }
+
   return (
-    <div className={cn('flex items-start gap-2 rounded-lg border px-3.5 py-2.5 text-sm', styles)}>
-      {icon}
-      <span>{children}</span>
+    <div className={cn('rounded-xl border p-4', box)}>
+      <div className="flex items-start gap-3">
+        <Icon size={18} className={cn('mt-px shrink-0', head)} />
+        <div className="min-w-0 flex-1">
+          <div className={cn('text-sm', head)}>{headline}</div>
+          <div className={cn('mt-0.5 text-xs', subC)}>{sub}</div>
+        </div>
+      </div>
+      <ConfidenceMeter pct={test.confidencePct} tone={tone} />
     </div>
   );
 }
 
-function VariantRow({ v, metric, maxRate, isLeader }: { v: VariantStat; metric: 'deposit' | 'optin'; maxRate: number; isLeader: boolean }) {
-  const rate = (metric === 'deposit' ? v.depositRate : v.optinRate) ?? 0;
-  const barPct = Math.max(2, Math.round((rate / maxRate) * 100));
+// Confidence toward the 95% threshold, with a tick marking the line to cross.
+function ConfidenceMeter({ pct, tone }: { pct: number | null; tone: Tone }) {
+  const val = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+  const fill = { green: 'bg-green', yellow: 'bg-yellow', muted: 'bg-fg/30' }[tone];
   return (
-    <div className={cn('rounded-lg border px-3.5 py-3', isLeader ? 'border-green/50 bg-green/5' : 'border-border bg-bg')}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          {isLeader && <Trophy size={13} className="text-green" />}
-          <span className="text-sm font-semibold text-fg">{v.label}</span>
-        </div>
-        <div className="flex items-center gap-5 text-right">
-          <Metric label="Visitors" value={formatNumber(v.views)} />
-          <Metric label={`Opt-ins · ${formatNumber(v.optins)}`} value={v.optinRate != null ? formatPercent(v.optinRate * 100, 1) : '—'} />
-          <Metric label={`Deposits · ${formatNumber(v.deposits)}`} value={v.depositRate != null ? formatPercent(v.depositRate * 100, 1) : '—'} />
-        </div>
+    <div className="mt-3.5">
+      <div className="relative h-2 overflow-hidden rounded-full bg-border">
+        <div className={cn('h-full rounded-full transition-[width] duration-500 ease-out', fill)} style={{ width: `${val}%` }} />
+        <div className="absolute inset-y-0 w-px bg-fg/40" style={{ left: '95%' }} aria-hidden="true" />
       </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-border">
-        <div className={cn('h-full rounded-full', isLeader ? 'bg-green' : 'bg-pink')} style={{ width: `${barPct}%` }} />
+      <div className="mt-1.5 flex justify-between text-[10px] tabular-nums text-fg-dim">
+        <span>{pct == null ? 'Needs both versions' : `${Math.round(val)}% confident`}</span>
+        <span>95% to call it</span>
       </div>
     </div>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+// One version: the primary-metric rate as the hero, then the raw funnel counts —
+// views → opt-ins → deposits — with each stage's conversion rate beneath it.
+function VersionColumn({ v, funnelId, primaryMetric, isWinner, isLeader, recommended }: { v: VariantStat; funnelId: string; primaryMetric: 'deposit' | 'optin'; isWinner: boolean; isLeader: boolean; recommended: boolean }) {
+  const heroRate = primaryMetric === 'deposit' ? v.depositRate : v.optinRate;
+  const heroLabel = primaryMetric === 'deposit' ? 'deposit rate' : 'opt-in rate';
   return (
-    <div className="min-w-[68px]">
-      <div className="text-sm font-semibold tabular-nums text-fg">{value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-fg-dim">{label}</div>
+    <div className={cn('flex flex-col rounded-xl border p-4', isWinner ? 'border-green/50 bg-green/5' : 'border-border bg-bg')}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold text-fg">{v.label}</span>
+        {isWinner ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-green/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-green"><Trophy size={11} /> Winner</span>
+        ) : isLeader ? (
+          <span className="rounded-full bg-border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-fg-dim">Leading</span>
+        ) : null}
+      </div>
+
+      <div className="mt-2 flex items-baseline gap-1.5">
+        <span className={cn('font-mono text-3xl font-bold tabular-nums', isWinner ? 'text-green' : 'text-fg')}>
+          {heroRate != null ? formatPercent(heroRate * 100, 1) : '—'}
+        </span>
+        <span className="text-[11px] text-fg-dim">{heroLabel}</span>
+      </div>
+
+      <div className="mt-4 grid grid-cols-3 divide-x divide-border rounded-lg border border-border">
+        <StageStat label="Views" value={v.views} />
+        <StageStat label="Opt-ins" value={v.optins} rate={v.optinRate} />
+        <StageStat label="Deposits" value={v.deposits} rate={v.depositRate} accent={isWinner ? 'green' : 'pink'} />
+      </div>
+
+      <DeclareButton funnelId={funnelId} variantKey={v.key} variantLabel={v.label} recommended={recommended} />
     </div>
   );
 }
 
-function StatusControl({ funnelId, status }: { funnelId: string; status: 'off' | 'running' | 'decided' }) {
+function DeclareButton({ funnelId, variantKey, variantLabel, recommended }: { funnelId: string; variantKey: string; variantLabel: string; recommended: boolean }) {
   const [pending, setPending] = useState(false);
-  const set = async (next: 'off' | 'running' | 'decided') => {
+  const declare = async () => {
+    if (!window.confirm(`Declare ${variantLabel} the winner?\n\nThis ends the test and shows the funnel as a single flow. You can reopen it later.`)) return;
     setPending(true);
-    await setSplitTestStatus(funnelId, next);
+    await declareSplitWinner(funnelId, variantKey);
     setPending(false);
   };
-  const pill = {
-    running: 'bg-green/15 text-green border-green/40',
-    decided: 'bg-pink/15 text-pink border-pink/40',
-    off: 'bg-border text-fg-dim border-border',
-  }[status];
+  return (
+    <button
+      onClick={declare}
+      disabled={pending}
+      className={cn(
+        'mt-3 w-full rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50',
+        recommended
+          ? 'bg-green/15 text-green hover:bg-green/25'
+          : 'border border-border text-fg-muted hover:border-border-strong hover:text-fg',
+      )}
+    >
+      {pending ? 'Declaring…' : recommended ? 'Declare winner' : 'Make this the winner'}
+    </button>
+  );
+}
+
+function DecidedControl({ funnelId }: { funnelId: string }) {
+  const [pending, setPending] = useState(false);
+  const reopen = async () => { setPending(true); await reopenSplitTest(funnelId); setPending(false); };
   return (
     <div className="flex items-center gap-2">
-      <span className={cn('rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide', pill)}>
-        {status === 'off' ? 'Paused' : status}
-      </span>
-      <select
-        value={status}
+      <span className="rounded-full border border-green/40 bg-green/15 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green">Decided</span>
+      <button
+        onClick={reopen}
         disabled={pending}
-        onChange={e => set(e.target.value as 'off' | 'running' | 'decided')}
-        className="rounded-lg border border-border bg-bg px-2 py-1 text-xs text-fg focus:border-border-strong focus:outline-none"
-        aria-label="Test status"
+        className="rounded-lg border border-border bg-bg px-2.5 py-1 text-xs text-fg-muted transition-colors hover:border-border-strong hover:text-fg disabled:opacity-50"
       >
-        <option value="running">Running</option>
-        <option value="decided">Decided</option>
-        <option value="off">Paused</option>
-      </select>
+        {pending ? 'Reopening…' : 'Reopen test'}
+      </button>
     </div>
+  );
+}
+
+function StageStat({ label, value, rate, accent }: { label: string; value: number; rate?: number | null; accent?: 'green' | 'pink' }) {
+  const valColor = accent === 'green' ? 'text-green' : accent === 'pink' ? 'text-pink' : 'text-fg';
+  return (
+    <div className="px-3 py-2.5">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-fg-muted">{label}</div>
+      <div className={cn('mt-0.5 font-mono text-base font-bold tabular-nums', valColor)}>{formatNumber(value)}</div>
+      <div className="text-[10px] tabular-nums text-fg-dim">{rate != null ? `${formatPercent(rate * 100, 1)} of views` : ' '}</div>
+    </div>
+  );
+}
+
+// Running ⇄ Paused. "Decided" isn't a manual option — it's reached by declaring a winner.
+function StatusControl({ funnelId, status }: { funnelId: string; status: 'off' | 'running' | 'decided' }) {
+  const [pending, setPending] = useState(false);
+  const running = status === 'running';
+  const toggle = async () => {
+    setPending(true);
+    await setSplitTestStatus(funnelId, running ? 'off' : 'running');
+    setPending(false);
+  };
+  return (
+    <button
+      onClick={toggle}
+      disabled={pending}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition-colors disabled:opacity-50',
+        running ? 'border-green/40 bg-green/15 text-green hover:bg-green/25' : 'border-border bg-bg text-fg-dim hover:text-fg',
+      )}
+      title={running ? 'Pause the test' : 'Resume the test'}
+    >
+      <span className={cn('h-1.5 w-1.5 rounded-full', running ? 'bg-green' : 'bg-fg-dim')} />
+      {running ? 'Running' : 'Paused'}
+    </button>
   );
 }
 

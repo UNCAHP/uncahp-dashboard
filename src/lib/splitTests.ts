@@ -32,12 +32,13 @@ export type SplitTest = {
   upliftPct: number | null;   // relative lift of leader vs runner-up on the primary metric
   confidencePct: number | null; // 0–100; null when not computable yet
   callable: boolean;          // confidence ≥ 95% AND both variants have enough traffic
+  winnerKey: string | null;   // the declared winner (status 'decided'); collapses to simple flow
 };
 
 type SummaryRow = { funnel_key: string; variant: string; event: string; visitors: number };
 type FunnelRow = {
   id: string; client_id: string; name: string; track_key: string | null;
-  variants: unknown; split_status: string | null;
+  variants: unknown; split_status: string | null; winner_variant?: string | null;
 };
 
 // Standard normal CDF (Abramowitz & Stegun 7.1.26) — for the z-test p-value.
@@ -68,17 +69,17 @@ function normalizeVariants(raw: unknown): { key: string; label: string }[] {
 }
 
 export async function getSplitTests(): Promise<SplitTest[]> {
-  const { data: funnelData, error: fErr } = await supabaseAdmin
-    .from('funnels')
-    .select('id, client_id, name, track_key, variants, split_status')
-    .not('track_key', 'is', null);
-  // Before migration 0011 runs, track_key/variants/split_status don't exist yet — degrade
-  // to an empty scoreboard (the page still renders its setup form) instead of crashing.
-  if (fErr) {
-    console.warn('getSplitTests: split-test columns not ready yet —', fErr.message);
+  // Try with winner_variant (migration 0012); fall back without it (0011 only). Before 0011
+  // the columns don't exist at all — degrade to an empty scoreboard rather than crash.
+  const base = 'id, client_id, name, track_key, variants, split_status';
+  const q = (sel: string) => supabaseAdmin.from('funnels').select(sel).not('track_key', 'is', null);
+  let res = await q(base + ', winner_variant');
+  if (res.error) res = await q(base);
+  if (res.error) {
+    console.warn('getSplitTests: split-test columns not ready yet —', res.error.message);
     return [];
   }
-  const funnels = (funnelData ?? []) as FunnelRow[];
+  const funnels = (res.data ?? []) as unknown as FunnelRow[];
   if (funnels.length === 0) return [];
 
   const keys = funnels.map(f => f.track_key).filter((k): k is string => !!k);
@@ -111,26 +112,36 @@ export async function getSplitTests(): Promise<SplitTest[]> {
     const key = f.track_key as string;
     const counts = byKey.get(key) ?? new Map();
     const declared = normalizeVariants(f.variants);
-    // Variant set = declared variants, plus any seen in data that weren't declared.
-    const seen = new Set<string>([...declared.map(d => d.key), ...counts.keys()]);
-    const labelOf = new Map(declared.map(d => [d.key, d.label]));
+    // The funnel's CONFIGURED intent decides the layout, not leftover data: 2+ declared
+    // versions = a real A/B test; anything else = single-bucket measure tracking. This
+    // stops historical a/b visits from making a re-configured measure funnel look like a test.
+    const isTest = declared.length >= 2;
+    const mode: 'measure' | 'test' = isTest ? 'test' : 'measure';
 
     const anyDeposits = [...counts.values()].some(c => c.deposit > 0);
     const primaryMetric: 'deposit' | 'optin' = anyDeposits ? 'deposit' : 'optin';
 
-    const variants: VariantStat[] = [...seen].sort().map(k => {
-      const c = counts.get(k) ?? { view: 0, optin: 0, deposit: 0 };
-      return {
-        key: k,
-        label: labelOf.get(k) || k.toUpperCase(),
-        views: c.view,
-        optins: c.optin,
-        deposits: c.deposit,
-        optinRate: c.view ? c.optin / c.view : null,
-        depositRate: c.view ? c.deposit / c.view : null,
-        isLeader: false,
-      };
+    const mkVariant = (key: string, label: string, c: { view: number; optin: number; deposit: number }): VariantStat => ({
+      key,
+      label,
+      views: c.view,
+      optins: c.optin,
+      deposits: c.deposit,
+      optinRate: c.view ? c.optin / c.view : null,
+      depositRate: c.view ? c.deposit / c.view : null,
+      isLeader: false,
     });
+
+    let variants: VariantStat[];
+    if (isTest) {
+      // Show exactly the declared versions; pull each one's counts from the data by key.
+      variants = declared.map(d => mkVariant(d.key, d.label, counts.get(d.key) ?? { view: 0, optin: 0, deposit: 0 }));
+    } else {
+      // Measure: fold every recorded variant into one "all visitors" bucket.
+      const agg = { view: 0, optin: 0, deposit: 0 };
+      for (const c of counts.values()) { agg.view += c.view; agg.optin += c.optin; agg.deposit += c.deposit; }
+      variants = [mkVariant(declared[0]?.key ?? 'default', declared[0]?.label ?? 'All visitors', agg)];
+    }
 
     const rateOf = (v: VariantStat) => (primaryMetric === 'deposit' ? v.depositRate : v.optinRate) ?? -1;
     const convOf = (v: VariantStat) => (primaryMetric === 'deposit' ? v.deposits : v.optins);
@@ -153,10 +164,6 @@ export async function getSplitTests(): Promise<SplitTest[]> {
         leader.views >= MIN_PER_VARIANT && runnerUp.views >= MIN_PER_VARIANT;
     }
 
-    // A funnel is a real A/B test when it has 2+ variants; otherwise it's single-bucket
-    // backup tracking (measure).
-    const mode: 'measure' | 'test' = variants.length >= 2 ? 'test' : 'measure';
-
     return {
       funnelId: f.id,
       funnelName: f.name ?? '',
@@ -173,6 +180,7 @@ export async function getSplitTests(): Promise<SplitTest[]> {
       upliftPct,
       confidencePct,
       callable,
+      winnerKey: isTest && declared.some(d => d.key === f.winner_variant) ? (f.winner_variant as string) : null,
     };
   }).sort((a, b) => b.totalViews - a.totalViews);
 }
