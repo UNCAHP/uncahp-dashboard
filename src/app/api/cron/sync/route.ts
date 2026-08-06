@@ -29,23 +29,31 @@ export async function GET(req: Request) {
     .eq('is_active', true);
   const locs = (keys ?? []).map(k => ({ id: k.location_id as string, name: (k.location_name as string) ?? (k.location_id as string) }));
 
-  // Each fetch spins up a separate sync-client invocation → they run concurrently.
-  const results = await Promise.all(locs.map(async l => {
-    try {
-      const r = await fetch(`${origin}/api/cron/sync-client?loc=${encodeURIComponent(l.id)}`, { headers: authHeaders });
-      const text = await r.text();
-      let j: { ok?: boolean; error?: string; meta?: { error?: string }; ghl?: { error?: string }; calls?: { error?: string } } | null = null;
-      try { j = JSON.parse(text); } catch { /* non-JSON = auth wall / protection page, not our route */ }
-      if (!j) return { client: l.name, ok: false, error: `non-JSON ${r.status}: ${text.slice(0, 140)}` };
-      return { client: l.name, ok: !!j.ok, error: j.error ?? null, meta: j.meta?.error ?? null, ghl: j.ghl?.error ?? null, calls: j.calls?.error ?? null };
-    } catch (e) {
-      return { client: l.name, ok: false, error: e instanceof Error ? e.message : 'dispatch error' };
-    }
-  }));
+  // Each fetch spins up a SEPARATE sync-client invocation with its own 300s budget. We
+  // trigger them all, then wait only a short window — NOT for every client to finish.
+  // Awaiting all of them made the dispatcher block for the full sync and blow past its own
+  // 300s limit (FUNCTION_INVOCATION_TIMEOUT / 504). Vercel serverless functions run to
+  // completion even after the caller stops waiting, so the clients that don't confirm inside
+  // the window still finish and write their data in the background.
+  const TRIGGER_MS = 60_000;
+  const settled = await Promise.allSettled(locs.map(l =>
+    fetch(`${origin}/api/cron/sync-client?loc=${encodeURIComponent(l.id)}`, {
+      headers: authHeaders,
+      signal: AbortSignal.timeout(TRIGGER_MS),
+    }).then(async r => {
+      const t = await r.text();
+      try {
+        const j = JSON.parse(t) as { ok?: boolean; meta?: { error?: string }; ghl?: { error?: string }; calls?: { error?: string } };
+        return { client: l.name, ok: !!j.ok, meta: j.meta?.error ?? null, ghl: j.ghl?.error ?? null, calls: j.calls?.error ?? null };
+      } catch { return { client: l.name, ok: false, error: `non-JSON ${r.status}` }; }
+    }),
+  ));
 
-  // Surface the full per-client / per-source outcome in the Vercel logs so failures are
-  // diagnosable (the route otherwise returns 200 even when every inner sync errored).
-  const summary = { origin, clients: locs.length, succeeded: results.filter(r => r.ok).length, results };
-  console.log('[cron] sync summary:', JSON.stringify(summary));
-  return Response.json({ ok: true, ...summary });
+  const results = settled.filter(s => s.status === 'fulfilled').map(s => (s as PromiseFulfilledResult<Record<string, unknown>>).value);
+  const confirmed = results.filter(r => r.ok).length;
+  const stillRunning = locs.length - results.length;
+  // Log per-client outcomes for the clients that confirmed within the window; the rest are
+  // still syncing in their own invocations.
+  console.log('[cron] dispatched:', JSON.stringify({ origin, clients: locs.length, confirmed, stillRunning, results }));
+  return Response.json({ ok: true, clients: locs.length, confirmed, stillRunning });
 }
