@@ -31,6 +31,22 @@ async function get(url: string, key: string): Promise<Record<string, unknown>> {
   try { return (await r.json()) as Record<string, unknown>; } catch { return {}; }
 }
 
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+// GHL's /conversations/{id}/messages endpoint intermittently returns a TRANSIENT 401 under
+// concurrent load, even when the token has the scope. Retry a few times with backoff before
+// letting a 401 stand — otherwise a momentary blip gets misreported as a permanent
+// "missing View Conversation Messages scope" and the client's calls are wrongly skipped.
+async function getMessages(url: string, key: string): Promise<Record<string, unknown>> {
+  let j: Record<string, unknown> = {};
+  for (let attempt = 0; attempt < 4; attempt++) {
+    j = await get(url, key);
+    if ((j.statusCode as number) !== 401) return j;
+    await sleep(400 * (attempt + 1));
+  }
+  return j; // still 401 after retries → caller can treat it as a genuine scope gap
+}
+
 export async function syncClientCalls(locationId: string, days = 30): Promise<CallsSyncResult> {
   if (!locationId) return { ok: false, error: 'Missing client id.' };
 
@@ -77,10 +93,11 @@ export async function syncClientCalls(locationId: string, days = 30): Promise<Ca
   for (let i = 0; i < convIds.length; i += CONC) {
     const batch = convIds.slice(i, i + CONC);
     const results = await Promise.all(batch.map(convId =>
-      get(`${V2}/conversations/${convId}/messages?type=TYPE_CALL`, key)));
+      getMessages(`${V2}/conversations/${convId}/messages?type=TYPE_CALL`, key)));
     // Reading a conversation's messages needs its own scope ("View Conversation Messages" /
     // conversations/message.readonly). A token can pass the conversations *search* above but
-    // still get 401 here — don't swallow it as "no calls", surface it so it's fixable.
+    // still get 401 here. getMessages() already retried transient 401s, so a 401 that
+    // survives here is a genuine missing-scope gap — surface it so it's fixable.
     if (results.some(mj => (mj.statusCode as number) === 401)) {
       return { ok: false, error: "GHL token is missing the 'View Conversation Messages' scope — add it to this client's Private Integration Token, then sync again." };
     }
