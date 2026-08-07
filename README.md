@@ -45,11 +45,18 @@ Generate the token with:
 openssl rand -hex 32
 ```
 
-The sync reads tabs named `<Setter> - <Month Year>` ("Cathy - August 2026") and stores the
-month totals row from each. Tabs in the pre-July-2025 layout have no SMS/CALL split and are
-skipped — they're listed in the sync response's `skipped` array. Setting
-`BOOKINGS_KPIS_ENABLED = false` in `src/lib/csrConstants.ts` parks both columns as
-"not tracked".
+The sync reads tabs named `<Setter> - <Month Year>` ("Cathy - August 2026") and stores two
+grains: the month totals row → `csr_sheet_bookings` (the scorecard), and each day row →
+`csr_sheet_daily` (the expandable per-setter breakdown under each scorecard row). Tabs in
+the pre-July-2025 layout have no SMS/CALL split and are skipped — they're listed in the sync
+response's `skipped` array. Setting `BOOKINGS_KPIS_ENABLED = false` in
+`src/lib/csrConstants.ts` parks both columns as "not tracked".
+
+Known data quirk: in five older tabs (Oct 2025 – Jan 2026) the sheet's own `Days` totals row
+has a `SUM` range that misses the final day, so the monthly figure is a few bookings lower
+than the days beneath it add up to. The dashboard stores the sheet's total as-is rather than
+recomputing — it's the number the team sees in the sheet. Every month from May 2026 onward
+reconciles exactly.
 
 **After editing the Apps Script**, re-deploy it (Deploy → Manage deployments → edit →
 Version: *New version*). Editing the code alone does not change what the `/exec` URL serves.

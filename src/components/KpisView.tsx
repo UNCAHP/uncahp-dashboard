@@ -1,8 +1,9 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Headphones, Megaphone, FlaskConical, Target } from 'lucide-react';
-import type { CsrKpiRow } from '@/lib/kpis';
+import { Fragment, useState } from 'react';
+import { Headphones, Megaphone, FlaskConical, Target, ChevronRight, Phone, MessageSquare } from 'lucide-react';
+import type { CsrKpiRow, CsrDayRow } from '@/lib/kpis';
 import { InfoTip } from '@/components/InfoTip';
 import { BOOKINGS_KPIS_ENABLED } from '@/lib/csrConstants';
 import { cn } from '@/lib/utils';
@@ -22,9 +23,17 @@ const confirmedTier = (n: number): Tier => (n >= 110 ? { label: 'Senior', cls: t
 const phoneTier = (p: number): Tier => (p >= 75 ? { label: 'Senior', cls: topCls } : p >= 65 ? { label: 'Flat', cls: topCls } : p >= 60 ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
 const speedTier = (p: number): Tier => (p >= 85 ? { label: 'Senior', cls: topCls } : p >= 80 ? { label: 'Flat', cls: topCls } : p >= 75 ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
 
-export function KpisView({ rows, months, month }: { rows: CsrKpiRow[]; months: string[]; month: string | null }) {
+export function KpisView({ rows, months, month, daily }: {
+  rows: CsrKpiRow[];
+  months: string[];
+  month: string | null;
+  daily: Record<string, CsrDayRow[]>;
+}) {
   const router = useRouter();
   const goMonth = (m: string) => router.push(`/?view=kpis&month=${encodeURIComponent(m)}`);
+  // Several setters can be open at once, so their days can be compared side by side.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const toggle = (csr: string) => setOpen(o => ({ ...o, [csr]: !o[csr] }));
 
   return (
     <div className="space-y-6 p-8">
@@ -58,9 +67,32 @@ export function KpisView({ rows, months, month }: { rows: CsrKpiRow[]; months: s
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
-                <tr key={r.csr} className="border-b border-border/50 last:border-0">
-                  <td className="px-3 py-3 font-medium text-fg">{r.csr}</td>
+              {rows.map(r => {
+                const days = daily[r.csr.toLowerCase()] ?? [];
+                const expandable = days.length > 0;
+                const isOpen = !!open[r.csr];
+                return (
+                <Fragment key={r.csr}>
+                <tr
+                  onClick={expandable ? () => toggle(r.csr) : undefined}
+                  className={cn(
+                    'border-b border-border/50',
+                    expandable && 'cursor-pointer hover:bg-white/[0.02]',
+                    isOpen && 'bg-white/[0.02]',
+                  )}
+                >
+                  <td className="px-3 py-3 font-medium text-fg">
+                    <span className="inline-flex items-center gap-1.5">
+                      {expandable && (
+                        <ChevronRight
+                          size={14}
+                          className={cn('text-fg-dim transition-transform', isOpen && 'rotate-90')}
+                          aria-hidden
+                        />
+                      )}
+                      {r.csr}
+                    </span>
+                  </td>
                   {/* Both columns come from the Appointment Setting Tracker sheet. A setter
                       with no tab for the month has no sheet row at all, so show that as
                       "no sheet data" rather than a scored 0 they didn't earn. */}
@@ -80,7 +112,16 @@ export function KpisView({ rows, months, month }: { rows: CsrKpiRow[]; months: s
                     tier={r.speedPct == null ? null : speedTier(r.speedPct)}
                   />
                 </tr>
-              ))}
+                {isOpen && (
+                  <tr className="border-b border-border/50">
+                    <td colSpan={4} className="bg-black/20 px-3 pb-4 pt-1">
+                      <DailyBreakdown csr={r.csr} days={days} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
               {rows.length === 0 && (
                 <tr><td colSpan={4} className="px-3 py-10 text-center text-sm text-fg-dim">No setter activity in {fmtMonth(month)}.</td></tr>
               )}
@@ -98,6 +139,82 @@ export function KpisView({ rows, months, month }: { rows: CsrKpiRow[]; months: s
       <RoleCard icon={FlaskConical} title="Funnel Builders" subtitle="Funnel conversion performance">
         <PlaceholderKpis lines={['e.g. opt-in rate, deposit rate, pages shipped, time-to-launch — with targets']} />
       </RoleCard>
+    </div>
+  );
+}
+
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// Parsed as UTC (the stored value is a plain yyyy-mm-dd) so the weekday can't drift by a
+// day depending on where the viewer is.
+const fmtDay = (iso: string): string => {
+  const d = new Date(`${iso}T12:00:00Z`);
+  return `${DAY_NAMES[d.getUTCDay()]} ${d.getUTCDate()}`;
+};
+
+/**
+ * A setter's month, day by day, split phone vs SMS.
+ *
+ * Days with no bookings are hidden rather than listed as zeroes — most months have a lot of
+ * them, and they push the days that matter off the screen. The count is still reported so
+ * the omission is visible.
+ */
+function DailyBreakdown({ csr, days }: { csr: string; days: CsrDayRow[] }) {
+  const active = days.filter(d => d.total > 0);
+  const quiet = days.length - active.length;
+  const phone = days.reduce((n, d) => n + d.phone, 0);
+  const sms = days.reduce((n, d) => n + d.sms, 0);
+  const busiest = Math.max(1, ...active.map(d => d.total));
+
+  if (!active.length) {
+    return <div className="py-3 text-center text-xs text-fg-dim">No bookings logged on any day this month for {csr}.</div>;
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-surface/60">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-border px-3 py-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">{csr} · day by day</span>
+        <span className="flex items-center gap-3 text-[11px] text-fg-dim">
+          <span className="inline-flex items-center gap-1"><Phone size={11} className="text-green" />{phone} phone</span>
+          <span className="inline-flex items-center gap-1"><MessageSquare size={11} className="text-fg-muted" />{sms} SMS</span>
+          <span>{active.length} active {active.length === 1 ? 'day' : 'days'}</span>
+        </span>
+      </div>
+
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-wider text-fg-dim">
+            <th className="px-3 py-1.5 text-left font-semibold">Day</th>
+            <th className="px-3 py-1.5 text-right font-semibold">Total</th>
+            <th className="px-3 py-1.5 text-right font-semibold">Phone</th>
+            <th className="px-3 py-1.5 text-right font-semibold">SMS</th>
+            <th className="w-1/3 px-3 py-1.5 text-left font-semibold">Split</th>
+          </tr>
+        </thead>
+        <tbody>
+          {active.map(d => (
+            <tr key={d.date} className="border-t border-border/40">
+              <td className="whitespace-nowrap px-3 py-1.5 text-fg-muted">{fmtDay(d.date)}</td>
+              <td className="px-3 py-1.5 text-right font-mono font-semibold tabular-nums text-fg">{d.total}</td>
+              <td className="px-3 py-1.5 text-right font-mono tabular-nums text-green">{d.phone || '·'}</td>
+              <td className="px-3 py-1.5 text-right font-mono tabular-nums text-fg-muted">{d.sms || '·'}</td>
+              <td className="px-3 py-1.5">
+                {/* Bars are scaled against the setter's busiest day, so the shape of the
+                    month reads at a glance without needing an axis. */}
+                <span className="flex h-1.5 w-full overflow-hidden rounded-full bg-white/5" title={`${d.phone} phone · ${d.sms} SMS`}>
+                  <span className="bg-green/80" style={{ width: `${(100 * d.phone) / busiest}%` }} />
+                  <span className="bg-white/25" style={{ width: `${(100 * d.sms) / busiest}%` }} />
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {quiet > 0 && (
+        <div className="border-t border-border px-3 py-1.5 text-[10px] text-fg-dim">
+          {quiet} {quiet === 1 ? 'day' : 'days'} with no bookings hidden
+        </div>
+      )}
     </div>
   );
 }

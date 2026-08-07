@@ -107,6 +107,39 @@ export async function getCsrScorecard(month: string | null): Promise<CsrKpiRow[]
   return [...by.values()].sort((a, b) => b.confirmed - a.confirmed || (b.speedLeads - a.speedLeads));
 }
 
+// One day's bookings for one setter, for the expandable breakdown under each scorecard row.
+export type CsrDayRow = {
+  date: string;    // yyyy-mm-dd
+  phone: number;
+  sms: number;
+  total: number;
+};
+
+/**
+ * Daily breakdown for every setter in a month, keyed by the same first-name key the
+ * scorecard rows use. Read in one query and grouped here — a month is ~90 rows, so it's
+ * cheaper than a request per setter.
+ */
+export async function getCsrDaily(month: string | null): Promise<Record<string, CsrDayRow[]>> {
+  if (!month) return {};
+  const { data } = await supabaseAdmin
+    .from('csr_sheet_daily')
+    .select('setter_key, booking_date, phone_bookings, sms_bookings, total_bookings')
+    .eq('period_month', month)
+    .order('booking_date');
+
+  const by: Record<string, CsrDayRow[]> = {};
+  for (const r of (data ?? []) as { setter_key: string; booking_date: string; phone_bookings: number; sms_bookings: number; total_bookings: number }[]) {
+    (by[r.setter_key] ??= []).push({
+      date: String(r.booking_date),
+      phone: r.phone_bookings,
+      sms: r.sms_bookings,
+      total: r.total_bookings,
+    });
+  }
+  return by;
+}
+
 // Months offered by the picker. Sourced from BOTH the synced sheet (every month with a
 // setter tab) and the archived booking log, so historic months logged in the dashboard
 // don't disappear from the picker now that Bookings is archived.

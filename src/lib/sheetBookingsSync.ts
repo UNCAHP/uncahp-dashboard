@@ -32,6 +32,7 @@ export type SheetBookingsSyncResult = {
   ok: boolean;
   tabsMatched?: number;
   rowsUpserted?: number;
+  dailyRowsUpserted?: number;
   months?: string[];
   skipped?: string[];
   error?: string;
@@ -67,7 +68,14 @@ export type TabTotals = { phone: number; sms: number; total: number };
  * either can't be found, so a restructured tab is skipped rather than written as zeroes —
  * a wrong 0 would score against the setter's KPI as a real miss.
  */
-export function extractTotals(grid: SheetGrid): TabTotals | null {
+type SummaryCols = { smsCol: number; callCol: number; totalCol: number };
+
+/**
+ * Locate the month-summary columns (SMS Total / CALL Total / Total) in the header block.
+ * Every row — each day and the "Days" totals row — carries its figures in these same
+ * columns, so both the monthly and the daily extraction key off this one lookup.
+ */
+function summaryColumns(grid: SheetGrid): SummaryCols | null {
   let smsCol = -1, callCol = -1, totalCol = -1;
   let headerRow: SheetGrid[number] | null = null;
   for (const row of grid.slice(0, 5)) {
@@ -91,19 +99,76 @@ export function extractTotals(grid: SheetGrid): TabTotals | null {
     if (left === 'sms' && right === 'call') { smsCol = totalCol - 2; callCol = totalCol - 1; }
   }
   if (smsCol < 0 || callCol < 0) return null;
+  return { smsCol, callCol, totalCol };
+}
+
+export function extractTotals(grid: SheetGrid): TabTotals | null {
+  const cols = summaryColumns(grid);
+  if (!cols) return null;
 
   const totalsRow = grid.find(row => cellText(row?.[0]).toLowerCase() === 'days');
   if (!totalsRow) return null;
 
-  const sms = cellNum(totalsRow[smsCol]);
-  const phone = cellNum(totalsRow[callCol]);
+  const sms = cellNum(totalsRow[cols.smsCol]);
+  const phone = cellNum(totalsRow[cols.callCol]);
   // Prefer the sheet's own Total; fall back to the sum if that column is missing.
-  const total = totalCol >= 0 ? cellNum(totalsRow[totalCol]) : phone + sms;
+  const total = cols.totalCol >= 0 ? cellNum(totalsRow[cols.totalCol]) : phone + sms;
 
   // A month with bookings but no phone/SMS split means we located the wrong columns.
   // Skip rather than store it — 0 phone bookings would read as a real KPI miss.
   if (total > 0 && phone + sms === 0) return null;
   return { phone, sms, total };
+}
+
+const WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+// Day-of-month from the sheet's date cell. Apps Script serialises a date cell to an ISO
+// string in UTC, so a local midnight in a positive-offset zone (BST) lands on the PREVIOUS
+// day — nudging by 12h before reading the date undoes that for any real-world offset.
+// Excel-style serial numbers (days since 1899-12-30) are handled too, and anything
+// unrecognised falls back to the row's position in the month.
+function dayOfMonth(cell: unknown): number | null {
+  if (typeof cell === 'number' && cell > 20000 && cell < 90000) {
+    const ms = Date.UTC(1899, 11, 30) + cell * 86_400_000;
+    return new Date(ms).getUTCDate();
+  }
+  const text = cellText(cell);
+  if (!text) return null;
+  const parsed = Date.parse(text);
+  if (Number.isNaN(parsed)) return null;
+  return new Date(parsed + 12 * 3_600_000).getUTCDate();
+}
+
+export type DayTotals = { day: number; phone: number; sms: number; total: number };
+
+/**
+ * One entry per day row of a setter tab: the day's bookings split phone (CALL) vs SMS.
+ *
+ * Day rows are the ones whose first cell is a weekday name, in sheet order, ending at the
+ * "Days" totals row. Returns [] rather than null when a tab has no readable day rows — the
+ * monthly total may still be perfectly good, and the daily view just shows nothing.
+ */
+export function extractDaily(grid: SheetGrid): DayTotals[] {
+  const cols = summaryColumns(grid);
+  if (!cols) return [];
+
+  const out: DayTotals[] = [];
+  let seen = 0;
+  for (const row of grid) {
+    const label = cellText(row?.[0]).toLowerCase();
+    if (label === 'days') break;                 // totals row — stop
+    if (!WEEKDAYS.includes(label)) continue;     // header/blank rows
+    seen++;
+
+    const day = dayOfMonth(row[1]) ?? seen;
+    if (day < 1 || day > 31) continue;
+
+    const sms = cellNum(row[cols.smsCol]);
+    const phone = cellNum(row[cols.callCol]);
+    const total = cols.totalCol >= 0 ? cellNum(row[cols.totalCol]) : phone + sms;
+    out.push({ day, phone, sms, total });
+  }
+  return out;
 }
 
 type ScriptResponse = { ok?: boolean; error?: string; tabs?: Array<{ name?: string; rows?: SheetGrid }> };
@@ -146,20 +211,45 @@ export async function syncSheetBookings(): Promise<SheetBookingsSyncResult> {
   if (!matched.length) return { ok: false, error: `no "<Setter> - <Month Year>" tabs found among ${tabs.length}` };
 
   const rows: Array<Record<string, unknown>> = [];
+  const dailyRows: Array<Record<string, unknown>> = [];
   const skipped: string[] = [];
+  const syncedAt = new Date().toISOString();
+
   for (const t of matched) {
     const totals = extractTotals(t.rows);
     if (!totals) { skipped.push(t.name); continue; }
+    const key = t.parsed.setter.split(/\s+/)[0].toLowerCase();
+    const setter = t.parsed.setter.split(/\s+/)[0];
+
     rows.push({
-      setter_key: t.parsed.setter.split(/\s+/)[0].toLowerCase(),
-      setter: t.parsed.setter.split(/\s+/)[0],
+      setter_key: key,
+      setter,
       period_month: t.parsed.periodMonth,
       phone_bookings: totals.phone,
       sms_bookings: totals.sms,
       total_bookings: totals.total,
       source_tab: t.name,
-      _synced_at: new Date().toISOString(),
+      _synced_at: syncedAt,
     });
+
+    const ym = t.parsed.periodMonth.slice(0, 7);
+    // Days beyond the month's length can't be real (a stray row below the grid), so drop
+    // them rather than letting Postgres reject the whole batch on an invalid date.
+    const lastDay = new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).getUTCDate();
+    for (const d of extractDaily(t.rows)) {
+      if (d.day > lastDay) continue;
+      dailyRows.push({
+        setter_key: key,
+        setter,
+        period_month: t.parsed.periodMonth,
+        booking_date: `${ym}-${String(d.day).padStart(2, '0')}`,
+        phone_bookings: d.phone,
+        sms_bookings: d.sms,
+        total_bookings: d.total,
+        source_tab: t.name,
+        _synced_at: syncedAt,
+      });
+    }
   }
 
   for (let i = 0; i < rows.length; i += 500) {
@@ -169,10 +259,18 @@ export async function syncSheetBookings(): Promise<SheetBookingsSyncResult> {
     if (error) return { ok: false, error: `upsert failed: ${error.message}` };
   }
 
+  for (let i = 0; i < dailyRows.length; i += 500) {
+    const { error } = await supabaseAdmin
+      .from('csr_sheet_daily')
+      .upsert(dailyRows.slice(i, i + 500), { onConflict: 'setter_key,booking_date' });
+    if (error) return { ok: false, error: `daily upsert failed: ${error.message}` };
+  }
+
   return {
     ok: true,
     tabsMatched: matched.length,
     rowsUpserted: rows.length,
+    dailyRowsUpserted: dailyRows.length,
     months: [...new Set(rows.map(r => String(r.period_month)))].sort().reverse().slice(0, 6),
     skipped,
   };

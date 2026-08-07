@@ -40,9 +40,9 @@ var TOKEN = 'PUT-A-LONG-RANDOM-STRING-HERE';
 var SETTER_TAB = /^.+?\s*-\s*[A-Za-z]+\s+\d{4}$/;
 
 // How much of each tab to send: the header block (the dashboard locates the SMS/CALL Total
-// columns by their header text) plus the "Days" totals row. The day-by-day and per-clinic
-// detail stays in the sheet — the dashboard only stores month totals.
-var HEADER_ROWS = 5;
+// columns by their header text), every day row, and the "Days" totals row. The dashboard
+// stores month totals plus a per-day phone/SMS split; the per-clinic columns are sent along
+// with the rows but only their daily totals are read.
 var MAX_ROWS = 60;
 var MAX_COLS = 80;
 
@@ -75,16 +75,16 @@ function readTabs() {
     var lastCol = Math.min(sh.getLastColumn(), MAX_COLS);
     if (lastRow < 2 || lastCol < 2) continue;
 
+    // Everything down to and including the "Days" totals row. Its position moves (28–31 day
+    // rows depending on the month), so stop there rather than at a fixed offset — anything
+    // below it is scratch space we don't want.
     var values = sh.getRange(1, 1, lastRow, lastCol).getValues();
-
-    // Header block, then the totals row wherever it happens to sit (the sheet has 28–31
-    // day rows depending on the month, so its position moves).
-    var rows = values.slice(0, HEADER_ROWS);
-    for (var r = HEADER_ROWS; r < values.length; r++) {
-      if (String(values[r][0]).trim().toLowerCase() === 'days') { rows.push(values[r]); break; }
+    var end = values.length;
+    for (var r = 0; r < values.length; r++) {
+      if (String(values[r][0]).trim().toLowerCase() === 'days') { end = r + 1; break; }
     }
 
-    out.push({ name: name, rows: rows.map(clean) });
+    out.push({ name: name, rows: values.slice(0, end).map(clean) });
   }
   return out;
 }
