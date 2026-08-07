@@ -49,11 +49,22 @@ export async function GET(req: Request) {
     }),
   ));
 
+  // The setter-booking sheet is one global job, not per client — trigger it alongside the
+  // fan-out. Awaited (it's a handful of Sheets calls, not a per-client sweep) so a failure
+  // shows up in this response instead of vanishing into a background invocation.
+  const sheets = await fetch(`${origin}/api/cron/sync-sheets`, {
+    headers: authHeaders,
+    signal: AbortSignal.timeout(TRIGGER_MS),
+  })
+    .then(r => r.text())
+    .then(t => { try { return JSON.parse(t) as Record<string, unknown>; } catch { return { ok: false, error: `non-JSON: ${t.slice(0, 120)}` }; } })
+    .catch(e => ({ ok: false, error: e instanceof Error ? e.message : 'sheet sync trigger failed' }));
+
   const results = settled.filter(s => s.status === 'fulfilled').map(s => (s as PromiseFulfilledResult<Record<string, unknown>>).value);
   const confirmed = results.filter(r => r.ok).length;
   const stillRunning = locs.length - results.length;
   // Log per-client outcomes for the clients that confirmed within the window; the rest are
   // still syncing in their own invocations.
-  console.log('[cron] dispatched:', JSON.stringify({ origin, clients: locs.length, confirmed, stillRunning, results }));
-  return Response.json({ ok: true, clients: locs.length, confirmed, stillRunning });
+  console.log('[cron] dispatched:', JSON.stringify({ origin, clients: locs.length, confirmed, stillRunning, results, sheets }));
+  return Response.json({ ok: true, clients: locs.length, confirmed, stillRunning, sheets });
 }

@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { Headphones, Megaphone, FlaskConical, Target } from 'lucide-react';
 import type { CsrKpiRow } from '@/lib/kpis';
 import { InfoTip } from '@/components/InfoTip';
+import { BOOKINGS_KPIS_ENABLED } from '@/lib/csrConstants';
 import { cn } from '@/lib/utils';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -51,8 +52,8 @@ export function KpisView({ rows, months, month }: { rows: CsrKpiRow[]; months: s
             <thead>
               <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
                 <th className="px-3 py-2.5 text-left font-semibold">Setter</th>
-                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Confirmed bookings <InfoTip text="Bookings that paid a booking fee this month. Targets: Junior 60 · Flat 90 · Senior 110." /></span></th>
-                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Phone booking ratio <InfoTip text="Phone ÷ (Phone + SMS) bookings, from the channel each setter marks. Targets: Junior 60% · Flat 65% · Senior 75%." /></span></th>
+                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Confirmed bookings <InfoTip text={BOOKINGS_KPIS_ENABLED ? "The setter's booking total for the month, from their tab in the Appointment Setting Tracker sheet (synced daily). Targets: Junior 60 · Flat 90 · Senior 110." : 'Paused — not currently being tracked. Targets when live: Junior 60 · Flat 90 · Senior 110.'} /></span></th>
+                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Phone booking ratio <InfoTip text={BOOKINGS_KPIS_ENABLED ? 'CALL ÷ (CALL + SMS) bookings from the same sheet tab. Targets: Junior 60% · Flat 65% · Senior 75%.' : 'Paused — not currently being tracked. Targets when live: Junior 60% · Flat 65% · Senior 75%.'} /></span></th>
                 <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text="Per setter: reached by phone within 30 min ÷ the leads they phoned (10am–6pm UK). Never-phoned leads count against the team total on Call Tracking, not per person. Targets: Junior 75% · Flat 80% · Senior 85%." /></span></th>
               </tr>
             </thead>
@@ -60,11 +61,18 @@ export function KpisView({ rows, months, month }: { rows: CsrKpiRow[]; months: s
               {rows.map(r => (
                 <tr key={r.csr} className="border-b border-border/50 last:border-0">
                   <td className="px-3 py-3 font-medium text-fg">{r.csr}</td>
-                  <KpiCell value={String(r.confirmed)} sub={`${r.bookingsTotal} booked`} tier={confirmedTier(r.confirmed)} />
+                  {/* Both columns come from the Appointment Setting Tracker sheet. A setter
+                      with no tab for the month has no sheet row at all, so show that as
+                      "no sheet data" rather than a scored 0 they didn't earn. */}
                   <KpiCell
-                    value={r.phonePct == null ? '—' : `${r.phonePct}%`}
-                    sub={r.phone + r.sms > 0 ? `${r.phone}/${r.phone + r.sms} marked` : 'not marked'}
-                    tier={r.phonePct == null ? null : phoneTier(r.phonePct)}
+                    value={!BOOKINGS_KPIS_ENABLED || !r.hasSheetRow ? '—' : String(r.confirmed)}
+                    sub={!BOOKINGS_KPIS_ENABLED ? 'not tracked' : !r.hasSheetRow ? 'no sheet data' : `${r.bookingsTotal} booked`}
+                    tier={!BOOKINGS_KPIS_ENABLED || !r.hasSheetRow ? null : confirmedTier(r.confirmed)}
+                  />
+                  <KpiCell
+                    value={!BOOKINGS_KPIS_ENABLED || r.phonePct == null ? '—' : `${r.phonePct}%`}
+                    sub={!BOOKINGS_KPIS_ENABLED ? 'not tracked' : !r.hasSheetRow ? 'no sheet data' : `${r.phone}/${r.phone + r.sms} by phone`}
+                    tier={!BOOKINGS_KPIS_ENABLED || r.phonePct == null ? null : phoneTier(r.phonePct)}
                   />
                   <KpiCell
                     value={r.speedPct == null ? '—' : `${r.speedPct}%`}
