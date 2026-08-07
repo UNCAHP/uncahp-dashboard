@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { LayoutGrid, BarChart3, FlaskConical, Phone, CalendarCheck, Target, Building2, Shield, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { LayoutGrid, BarChart3, FlaskConical, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn } from '@/lib/utils';
@@ -15,7 +15,10 @@ const NAV: Array<{ id: View; label: string; icon: typeof LayoutGrid }> = [
   { id: 'client', label: 'Client View', icon: BarChart3 },
   { id: 'funnel', label: 'Funnel Analytics', icon: FlaskConical },
   { id: 'calls', label: 'Call Tracking', icon: Phone },
-  { id: 'bookings', label: 'Bookings', icon: CalendarCheck },
+  // Bookings is archived for now — hidden from the nav, but the page, its data, and the
+  // bookings feed into the KPI scorecard all still work. Reachable at /?view=bookings, and
+  // un-archiving is just restoring this line:
+  //   { id: 'bookings', label: 'Bookings', icon: CalendarCheck },
   { id: 'kpis', label: 'KPIs', icon: Target },
   { id: 'clients', label: 'Clients', icon: Building2 },
   { id: 'admin', label: 'Admin Panel', icon: Shield },
