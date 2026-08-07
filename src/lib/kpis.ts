@@ -140,6 +140,24 @@ export async function getCsrDaily(month: string | null): Promise<Record<string, 
   return by;
 }
 
+/**
+ * Hours since the tracker sheet last synced, or null if it never has.
+ *
+ * Read from the newest `_synced_at` across the whole table rather than the selected month —
+ * the sync writes every month on each run, so a month-scoped read would report an old month
+ * as stale simply because nobody has touched that tab since.
+ */
+export async function getSheetSyncAgeHours(): Promise<number | null> {
+  const { data } = await supabaseAdmin
+    .from('csr_sheet_bookings')
+    .select('_synced_at')
+    .order('_synced_at', { ascending: false })
+    .limit(1);
+  const at = (data ?? [])[0]?._synced_at as string | undefined;
+  if (!at) return null;
+  return (Date.now() - Date.parse(at)) / 3_600_000;
+}
+
 // Months offered by the picker. Sourced from BOTH the synced sheet (every month with a
 // setter tab) and the archived booking log, so historic months logged in the dashboard
 // don't disappear from the picker now that Bookings is archived.

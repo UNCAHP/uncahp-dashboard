@@ -5,6 +5,7 @@ import { Fragment, useState } from 'react';
 import { Headphones, Megaphone, FlaskConical, Target, ChevronRight, Phone, MessageSquare } from 'lucide-react';
 import type { CsrKpiRow, CsrDayRow } from '@/lib/kpis';
 import { InfoTip } from '@/components/InfoTip';
+import { SyncBadge } from '@/components/FreshnessBadge';
 import { BOOKINGS_KPIS_ENABLED } from '@/lib/csrConstants';
 import { cn } from '@/lib/utils';
 
@@ -23,11 +24,12 @@ const confirmedTier = (n: number): Tier => (n >= 110 ? { label: 'Senior', cls: t
 const phoneTier = (p: number): Tier => (p >= 75 ? { label: 'Senior', cls: topCls } : p >= 65 ? { label: 'Flat', cls: topCls } : p >= 60 ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
 const speedTier = (p: number): Tier => (p >= 85 ? { label: 'Senior', cls: topCls } : p >= 80 ? { label: 'Flat', cls: topCls } : p >= 75 ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
 
-export function KpisView({ rows, months, month, daily }: {
+export function KpisView({ rows, months, month, daily, syncAgeHours }: {
   rows: CsrKpiRow[];
   months: string[];
   month: string | null;
   daily: Record<string, CsrDayRow[]>;
+  syncAgeHours: number | null;
 }) {
   const router = useRouter();
   const goMonth = (m: string) => router.push(`/?view=kpis&month=${encodeURIComponent(m)}`);
@@ -55,7 +57,12 @@ export function KpisView({ rows, months, month, daily }: {
       </div>
 
       {/* Appointment Setters */}
-      <RoleCard icon={Headphones} title="Appointment Setters" subtitle="Across all clinics">
+      <RoleCard
+        icon={Headphones}
+        title="Appointment Setters"
+        subtitle="Across all clinics"
+        right={BOOKINGS_KPIS_ENABLED ? <SyncBadge label="Tracker sheet" hours={syncAgeHours} /> : null}
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -219,7 +226,7 @@ function DailyBreakdown({ csr, days }: { csr: string; days: CsrDayRow[] }) {
   );
 }
 
-function RoleCard({ icon: Icon, title, subtitle, children }: { icon: typeof Target; title: string; subtitle: string; children: React.ReactNode }) {
+function RoleCard({ icon: Icon, title, subtitle, right, children }: { icon: typeof Target; title: string; subtitle: string; right?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-surface">
       <div className="flex items-center gap-2.5 border-b border-border px-5 py-3.5">
@@ -228,6 +235,7 @@ function RoleCard({ icon: Icon, title, subtitle, children }: { icon: typeof Targ
           <div className="text-sm font-semibold text-fg">{title}</div>
           <div className="text-[11px] text-fg-dim">{subtitle}</div>
         </div>
+        {right && <div className="ml-auto">{right}</div>}
       </div>
       <div className="p-2 sm:p-4">{children}</div>
     </div>

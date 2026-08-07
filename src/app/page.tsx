@@ -20,7 +20,7 @@ import { AllBookingsView } from '@/components/AllBookingsView';
 import { KpisView } from '@/components/KpisView';
 import { getSplitTests, type SplitTest } from '@/lib/splitTests';
 import { getBookings, getBookingMonths, getMonthCost, getAllBookings, getAllBookingMonths, type Booking, type BookingMonthCost } from '@/lib/bookingsAdmin';
-import { getCsrScorecard, getKpiMonths, getCsrDaily, type CsrKpiRow, type CsrDayRow } from '@/lib/kpis';
+import { getCsrScorecard, getKpiMonths, getCsrDaily, getSheetSyncAgeHours, type CsrKpiRow, type CsrDayRow } from '@/lib/kpis';
 import { ClientsView } from '@/components/ClientsView';
 import {
   defaultRange, getPortfolio, getCampaignExplorer, getClientList, getFunnelMetrics,
@@ -181,10 +181,11 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
   let kpiMonths: string[] = [];
   let kpiMonth: string | null = null;
   let kpiDaily: Record<string, CsrDayRow[]> = {};
+  let kpiSyncAgeHours: number | null = null;
   if (view === 'kpis') {
     kpiMonths = await getKpiMonths();
     kpiMonth = params.month && params.month !== 'all' ? params.month : (kpiMonths[0] ?? null);
-    [kpiRows, kpiDaily] = await Promise.all([getCsrScorecard(kpiMonth), getCsrDaily(kpiMonth)]);
+    [kpiRows, kpiDaily, kpiSyncAgeHours] = await Promise.all([getCsrScorecard(kpiMonth), getCsrDaily(kpiMonth), getSheetSyncAgeHours()]);
   }
 
   const activeClient = scopedClient ? clients.find(c => c.client_id === scopedClient) : null;
@@ -267,7 +268,7 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
             />
           )
         )}
-        {view === 'kpis' && <KpisView rows={kpiRows} months={kpiMonths} month={kpiMonth} daily={kpiDaily} />}
+        {view === 'kpis' && <KpisView rows={kpiRows} months={kpiMonths} month={kpiMonth} daily={kpiDaily} syncAgeHours={kpiSyncAgeHours} />}
         {view === 'clients' && <ClientsView clients={adminClients} />}
         {view === 'admin' && <PlaceholderView title="Admin Panel" subtitle="Team, integrations and workspace settings" />}
     </>
