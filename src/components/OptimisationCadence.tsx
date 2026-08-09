@@ -2,8 +2,9 @@
 
 import { useActionState, useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, Pencil, Trash2, Loader2, TrendingUp, TrendingDown, Minus, Undo2, Timer, Check } from 'lucide-react';
+import { Plus, Pencil, Trash2, Loader2, TrendingUp, TrendingDown, Minus, Undo2, Timer, Check, SplitSquareHorizontal, ChevronRight, Trophy } from 'lucide-react';
 import type { AdminFunnel } from '@/lib/funnelAdmin';
+import type { SplitTest } from '@/lib/splitTests';
 import type { ClientOption } from '@/lib/queries';
 // Values come from the client-safe constants module; lib/optimisations imports supabase and
 // would blow up the moment this component is evaluated in the browser.
@@ -53,7 +54,7 @@ const metricValue = (s: Snapshot | null, metric: PrimaryMetric): number | null =
   }
 };
 
-export function OptimisationCadence({ entries, funnels, clients, months, month, since, until }: {
+export function OptimisationCadence({ entries, funnels, clients, months, month, since, until, splitTests }: {
   entries: OptimisationEntry[];
   funnels: AdminFunnel[];
   clients: ClientOption[];
@@ -61,6 +62,7 @@ export function OptimisationCadence({ entries, funnels, clients, months, month, 
   month: string | null;
   since: string;
   until: string;
+  splitTests: SplitTest[];
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState<OptimisationEntry | 'new' | null>(null);
@@ -70,6 +72,23 @@ export function OptimisationCadence({ entries, funnels, clients, months, month, 
     const p = new URLSearchParams({ view: 'funnel', ftab: 'cadence', month: m, since, until });
     router.push(`/?${p.toString()}`);
   };
+
+  // A split test is an optimisation with better evidence than any before/after window can
+  // give: both versions ran at the same time against randomly split traffic, so budget
+  // changes, seasonality and day-of-week cancel out rather than confound the result. Running
+  // tests have no date to sort by, so they sit in their own band; a CALLED test is dated and
+  // belongs on the timeline with the other changes.
+  const running = splitTests.filter(t => t.mode === 'test' && t.status === 'running');
+  const decidedThisMonth = splitTests.filter(t =>
+    t.mode === 'test' && t.status === 'decided' && t.decidedAt && month &&
+    String(t.decidedAt).slice(0, 7) === month.slice(0, 7),
+  );
+
+  type Item = { kind: 'log'; entry: OptimisationEntry; date: string } | { kind: 'split'; test: SplitTest; date: string };
+  const items: Item[] = [
+    ...entries.map((entry): Item => ({ kind: 'log', entry, date: entry.changeDate })),
+    ...decidedThisMonth.map((test): Item => ({ kind: 'split', test, date: String(test.decidedAt).slice(0, 10) })),
+  ].sort((a, b) => b.date.localeCompare(a.date));
 
   const wins = entries.filter(e => e.verdict === 'win').length;
   const losses = entries.filter(e => e.verdict === 'loss').length;
@@ -99,18 +118,29 @@ export function OptimisationCadence({ entries, funnels, clients, months, month, 
 
       <MonthRhythm month={month} entries={entries} wins={wins} losses={losses} awaiting={awaiting} measuring={measuring} />
 
-      {entries.length === 0 ? (
+      {running.length > 0 && <InFlight tests={running} since={since} until={until} />}
+
+      {items.length === 0 ? (
         <EmptyMonth month={month} onLog={() => setEditing('new')} />
       ) : (
         <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-          {entries.map((e, i) => (
+          {items.map((item, i) => item.kind === 'log' ? (
             <EntryRow
-              key={e.id}
-              entry={e}
+              key={item.entry.id}
+              entry={item.entry}
               first={i === 0}
-              last={i === entries.length - 1}
-              clientName={clients.find(c => c.client_id === e.clientId)?.client_name ?? ''}
-              onEdit={() => setEditing(e)}
+              last={i === items.length - 1}
+              clientName={clients.find(c => c.client_id === item.entry.clientId)?.client_name ?? ''}
+              onEdit={() => setEditing(item.entry)}
+            />
+          ) : (
+            <DecidedTestRow
+              key={`split-${item.test.funnelId}`}
+              test={item.test}
+              first={i === 0}
+              last={i === items.length - 1}
+              since={since}
+              until={until}
             />
           ))}
         </div>
@@ -191,6 +221,186 @@ function MonthRhythm({ month, entries, wins, losses, awaiting, measuring }: {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Tests running right now. They carry no date — an experiment isn't an event — so they sit
+ * above the timeline rather than in it, which is also where you want them during a monthly
+ * review: this is what's still in flight and can't be judged yet.
+ */
+function InFlight({ tests, since, until }: { tests: SplitTest[]; since: string; until: string }) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-border bg-surface">
+      <div className="flex items-center gap-2 border-b border-border px-5 py-3">
+        <SplitSquareHorizontal size={13} className="text-pink" />
+        <span className="text-[11px] font-semibold uppercase tracking-widest text-fg-muted">
+          Split tests in flight
+        </span>
+        <span className="ml-auto font-mono text-[11px] tabular-nums text-fg-dim">{tests.length}</span>
+      </div>
+      {tests.map(t => (
+        <a
+          key={t.funnelId}
+          href={`/?view=funnel&funnel=${encodeURIComponent(t.funnelId)}&since=${since}&until=${until}`}
+          className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border/50 px-5 py-3 transition-colors last:border-0 hover:bg-white/[0.02]"
+        >
+          <div className="min-w-[10rem] flex-1">
+            <div className="text-sm font-medium text-fg">{t.funnelName}</div>
+            <div className="mt-0.5 text-[11px] text-fg-dim">
+              {t.clientName} · comparing {t.primaryMetric === 'deposit' ? 'conversion rate' : 'opt-in rate'}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {t.variants.map(v => (
+              <div key={v.key} className="text-right">
+                <div className="text-[9px] uppercase tracking-wider text-fg-dim">{v.label}</div>
+                <div className={cn(
+                  'mt-0.5 font-mono text-sm font-bold tabular-nums',
+                  t.leaderKey === v.key && t.totalViews > 0 ? 'text-pink' : 'text-fg',
+                )}>
+                  {formatNumber(v.views)}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Confidence is the only honest headline for a running test: a leader at 60% is
+              not a result, and showing an uplift without it invites calling it too early. */}
+          <div className="min-w-[7rem] text-right">
+            {t.confidencePct == null ? (
+              <span className="text-[11px] text-fg-dim">too early to read</span>
+            ) : (
+              <>
+                <div className={cn(
+                  'font-mono text-sm font-bold tabular-nums',
+                  t.callable ? 'text-green' : 'text-fg-muted',
+                )}>
+                  {t.confidencePct.toFixed(0)}%
+                </div>
+                <div className="text-[9px] uppercase tracking-wider text-fg-dim">
+                  {t.callable ? 'ready to call' : 'confidence'}
+                </div>
+              </>
+            )}
+          </div>
+          <ChevronRight size={14} className="text-fg-dim" />
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A called split test, on the timeline alongside the manual changes.
+ *
+ * It deliberately shows the TEST's own result rather than a 7-day before/after comparison.
+ * Both versions ran simultaneously against split traffic, so the uplift is measured with
+ * confounds cancelled out — re-deriving a verdict from consecutive weeks would replace
+ * strong evidence with weak.
+ */
+function DecidedTestRow({ test, first, last, since, until }: {
+  test: SplitTest; first: boolean; last: boolean; since: string; until: string;
+}) {
+  const d = dayOf(String(test.decidedAt).slice(0, 10));
+  const winner = test.variants.find(v => v.key === test.winnerKey) ?? null;
+  const others = test.variants.filter(v => v.key !== test.winnerKey);
+  const rateOf = (v: typeof test.variants[number]) =>
+    test.primaryMetric === 'deposit' ? v.depositRate : v.optinRate;
+
+  // Calling a test is not the same as the winner having beaten anything. A test called with
+  // no measurable gap — or on a hunch below the 95% bar — is a FLAT result: you picked a
+  // version to keep, but the data didn't separate them. Stamping every decision "Win" would
+  // make the month's tally meaningless.
+  const conclusive = test.upliftPct != null && test.confidencePct != null && test.confidencePct >= 95;
+  const tone = conclusive ? VERDICT_TONE.win : VERDICT_TONE.flat;
+  const ToneIcon = tone.icon;
+
+  return (
+    <div className={cn('relative flex gap-4 px-4 py-5 sm:gap-6 sm:px-5', !last && 'border-b border-border')}>
+      <div className="relative flex w-9 shrink-0 flex-col items-center sm:w-11">
+        <span aria-hidden className={cn('absolute left-1/2 w-px -translate-x-1/2 bg-border', first ? 'top-3' : '-top-5', last ? 'h-3' : '-bottom-5')} />
+        <span className={cn('relative z-10 mt-1.5 h-2.5 w-2.5 rounded-full ring-4 ring-surface', tone.dot)} />
+        <div className="mt-2 text-center">
+          <div className="font-mono text-lg font-extrabold leading-none tabular-nums text-fg">{d.getUTCDate()}</div>
+          <div className="mt-0.5 text-[9px] uppercase tracking-wider text-fg-dim">{WEEKDAYS[d.getUTCDay()]}</div>
+        </div>
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+          <div className="min-w-0">
+            <h3 className="flex flex-wrap items-center gap-2 text-base font-semibold leading-snug text-fg">
+              Called the split test
+              <span className="inline-flex items-center gap-1 rounded-md bg-green/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-green ring-1 ring-green/40">
+                <Trophy size={10} /> {winner?.label ?? test.winnerKey ?? 'winner'} won
+              </span>
+            </h3>
+            <div className="mt-0.5 truncate text-[11px] text-fg-dim">
+              {test.clientName} · {test.funnelName} · decided on {test.primaryMetric === 'deposit' ? 'conversion rate' : 'opt-in rate'}
+            </div>
+          </div>
+          <a
+            href={`/?view=funnel&funnel=${encodeURIComponent(test.funnelId)}&since=${since}&until=${until}`}
+            className="shrink-0 text-[11px] font-medium text-fg-muted transition-colors hover:text-pink"
+          >
+            Open test →
+          </a>
+        </div>
+
+        <div className="mt-4 rounded-xl bg-black/40 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+            <div className="min-w-[15rem] flex-1">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
+                {test.primaryMetric === 'deposit' ? 'Conversion rate' : 'Opt-in rate'} by version
+              </div>
+              <div className="mt-2.5 space-y-2">
+                {test.variants.map(v => (
+                  <Bar
+                    key={v.key}
+                    label={`${v.label} · ${formatNumber(v.views)} visitors`}
+                    value={rateOf(v)}
+                    scale={Math.max(1, ...test.variants.map(x => rateOf(x) ?? 0))}
+                    rate
+                    accent={v.key === test.winnerKey}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="w-full text-left sm:w-auto sm:text-right">
+              {test.upliftPct != null && others.length > 0 ? (
+                <>
+                  <div className={cn('font-mono text-4xl font-extrabold leading-none tracking-tight tabular-nums', tone.text)}>
+                    +{Math.abs(test.upliftPct).toFixed(1)}<span className="text-xl">%</span>
+                  </div>
+                  <div className="mt-2 text-[10px] font-semibold uppercase tracking-wider text-fg-dim">
+                    over {others[0].label}
+                    {test.confidencePct != null && ` · ${test.confidencePct.toFixed(0)}% confidence`}
+                  </div>
+                </>
+              ) : (
+                <div className="text-[11px] leading-relaxed text-fg-dim sm:max-w-[13rem]">
+                  Called without a measurable gap between the versions.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <span className={cn('inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider ring-1', tone.bg, tone.text, tone.ring)}>
+            <ToneIcon size={12} /> {conclusive ? 'Win' : 'Flat'}
+          </span>
+          <span className="text-[11px] text-fg-dim">
+            {conclusive
+              ? 'Measured by the test itself — both versions ran at once, so nothing else that week can explain it.'
+              : 'Called, but the versions never separated far enough to call it a win.'}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

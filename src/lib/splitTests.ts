@@ -33,12 +33,14 @@ export type SplitTest = {
   confidencePct: number | null; // 0–100; null when not computable yet
   callable: boolean;          // confidence ≥ 95% AND both variants have enough traffic
   winnerKey: string | null;   // the declared winner (status 'decided'); collapses to simple flow
+  decidedAt: string | null;   // when the test was called — places it on the cadence timeline
 };
 
 type SummaryRow = { funnel_key: string; variant: string; event: string; visitors: number };
 type FunnelRow = {
   id: string; client_id: string; name: string; track_key: string | null;
   variants: unknown; split_status: string | null; winner_variant?: string | null;
+  split_decided_at?: string | null;
 };
 
 // Standard normal CDF (Abramowitz & Stegun 7.1.26) — for the z-test p-value.
@@ -73,7 +75,8 @@ export async function getSplitTests(): Promise<SplitTest[]> {
   // the columns don't exist at all — degrade to an empty scoreboard rather than crash.
   const base = 'id, client_id, name, track_key, variants, split_status';
   const q = (sel: string) => supabaseAdmin.from('funnels').select(sel).not('track_key', 'is', null);
-  let res = await q(base + ', winner_variant');
+  let res = await q(base + ', winner_variant, split_decided_at');
+  if (res.error) res = await q(base + ', winner_variant');
   if (res.error) res = await q(base);
   if (res.error) {
     console.warn('getSplitTests: split-test columns not ready yet —', res.error.message);
@@ -181,6 +184,7 @@ export async function getSplitTests(): Promise<SplitTest[]> {
       confidencePct,
       callable,
       winnerKey: isTest && declared.some(d => d.key === f.winner_variant) ? (f.winner_variant as string) : null,
+      decidedAt: f.split_decided_at ? String(f.split_decided_at) : null,
     };
   }).sort((a, b) => b.totalViews - a.totalViews);
 }
