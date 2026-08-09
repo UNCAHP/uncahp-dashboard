@@ -26,3 +26,12 @@ export const VERDICT_LABELS: Record<Verdict, string> = {
 
 /** True for metrics measured in percent, which compare in percentage POINTS. */
 export const isRateMetric = (m: PrimaryMetric): boolean => m === 'optin_rate' || m === 'deposit_rate';
+
+/**
+ * Traffic each version needs before a split test may be called, and the confidence bar it
+ * must clear. Lives here, not in lib/splitTests.ts, so the client components that explain
+ * "how far off is this test?" can read the same numbers the server judges by — a threshold
+ * duplicated as a literal in the UI drifts the moment the statistics are tuned.
+ */
+export const SPLIT_MIN_VIEWS_PER_VARIANT = 30;
+export const SPLIT_CONFIDENCE_TO_CALL = 95;

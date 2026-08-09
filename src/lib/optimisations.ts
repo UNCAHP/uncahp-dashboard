@@ -47,6 +47,16 @@ export type Snapshot = {
   deposits: number;
   optinRate: number | null;
   depositRate: number | null;
+  /**
+   * Deposits taken on the funnel's OWN deposit page, and their rate — the part of the
+   * result the page itself earned. `deposits` blends in deposits a setter closed on the
+   * phone, which move with call effort rather than with anything a funnel change did.
+   *
+   * Display only. `depositRate` stays the verdict metric so that logged entries keep the
+   * meaning they were judged under; switching it would retroactively flip past win/loss.
+   */
+  depositsDirect: number;
+  depositRateDirect: number | null;
 };
 
 export type OptimisationEntry = OptimisationRow & {
@@ -107,6 +117,8 @@ const snapshotOf = (m: FunnelMetrics): Snapshot => ({
   deposits: m.deposits,
   optinRate: m.optin_rate_pct,
   depositRate: m.deposit_rate_pct,
+  depositsDirect: m.deposits_direct,
+  depositRateDirect: m.deposit_rate_direct_pct,
 });
 
 const metricValue = (s: Snapshot | null, metric: PrimaryMetric): number | null => {

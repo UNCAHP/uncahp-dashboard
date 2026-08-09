@@ -1,4 +1,5 @@
 import { supabaseAdmin } from './supabase';
+import { SPLIT_CONFIDENCE_TO_CALL, SPLIT_MIN_VIEWS_PER_VARIANT } from './optimisationConstants';
 
 // Split-test reporting. Reads the pre-aggregated funnel_split_summary view (distinct
 // visitors per funnel/variant/event) and turns it into a per-variant funnel plus a
@@ -109,7 +110,9 @@ export async function getSplitTests(): Promise<SplitTest[]> {
     else if (r.event === 'deposit') slot.deposit = r.visitors;
   }
 
-  const MIN_PER_VARIANT = 30; // don't call a winner before each side has a fair sample
+  // Don't call a winner before each side has a fair sample. Shared with the UI so the
+  // scoreboard's "how far off is it?" read can never disagree with this judgement.
+  const MIN_PER_VARIANT = SPLIT_MIN_VIEWS_PER_VARIANT;
 
   return funnels.map(f => {
     const key = f.track_key as string;
@@ -163,7 +166,7 @@ export async function getSplitTests(): Promise<SplitTest[]> {
       confidencePct = confidence(convOf(leader), leader.views, convOf(runnerUp), runnerUp.views);
       const lr = rateOf(leader), rr = rateOf(runnerUp);
       upliftPct = rr > 0 ? ((lr - rr) / rr) * 100 : null;
-      callable = confidencePct !== null && confidencePct >= 95 &&
+      callable = confidencePct !== null && confidencePct >= SPLIT_CONFIDENCE_TO_CALL &&
         leader.views >= MIN_PER_VARIANT && runnerUp.views >= MIN_PER_VARIANT;
     }
 

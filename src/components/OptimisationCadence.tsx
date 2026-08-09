@@ -4,11 +4,11 @@ import { useActionState, useCallback, useEffect, useMemo, useState, useTransitio
 import { useRouter } from 'next/navigation';
 import { Plus, Pencil, Trash2, Loader2, TrendingUp, TrendingDown, Minus, Undo2, Timer, Check, SplitSquareHorizontal, ChevronRight, Trophy } from 'lucide-react';
 import type { AdminFunnel } from '@/lib/funnelAdmin';
-import type { SplitTest } from '@/lib/splitTests';
-import type { ClientOption } from '@/lib/queries';
+import type { SplitTest, VariantStat } from '@/lib/splitTests';
+import type { ClientOption, FunnelMetrics } from '@/lib/queries';
 // Values come from the client-safe constants module; lib/optimisations imports supabase and
 // would blow up the moment this component is evaluated in the browser.
-import { METRIC_LABELS, PRIMARY_METRICS, VERDICTS, VERDICT_LABELS, isRateMetric, type PrimaryMetric, type Verdict } from '@/lib/optimisationConstants';
+import { METRIC_LABELS, PRIMARY_METRICS, SPLIT_CONFIDENCE_TO_CALL, SPLIT_MIN_VIEWS_PER_VARIANT, VERDICTS, VERDICT_LABELS, isRateMetric, type PrimaryMetric, type Verdict } from '@/lib/optimisationConstants';
 import type { OptimisationEntry, Snapshot } from '@/lib/optimisations';
 import { saveOptimisationAction, setVerdictAction, deleteOptimisationAction, type ActionState } from '@/app/actions/optimisations';
 import { DateField } from '@/components/DateField';
@@ -28,6 +28,8 @@ const fmtMonthLong = (iso: string | null): string => {
   const [y, m] = iso.split('-');
   return `${LONG_MONTHS[Number(m) - 1] ?? '?'} ${y}`;
 };
+/** "1 view", "2 views" — small counts are common on a young split test, so they read wrong often. */
+const plural = (n: number, word: string) => `${formatNumber(n)} ${word}${n === 1 ? '' : 's'}`;
 const dayOf = (iso: string) => new Date(`${iso}T12:00:00Z`);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const fmtShort = (iso: string): string => {
@@ -54,7 +56,7 @@ const metricValue = (s: Snapshot | null, metric: PrimaryMetric): number | null =
   }
 };
 
-export function OptimisationCadence({ entries, funnels, clients, months, month, since, until, splitTests }: {
+export function OptimisationCadence({ entries, funnels, clients, months, month, since, until, splitTests, metricsList }: {
   entries: OptimisationEntry[];
   funnels: AdminFunnel[];
   clients: ClientOption[];
@@ -63,6 +65,8 @@ export function OptimisationCadence({ entries, funnels, clients, months, month, 
   since: string;
   until: string;
   splitTests: SplitTest[];
+  /** Funnel-level GHL/Meta metrics for the selected range — the source of the deposit figures. */
+  metricsList: FunnelMetrics[];
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState<OptimisationEntry | 'new' | null>(null);
@@ -89,6 +93,12 @@ export function OptimisationCadence({ entries, funnels, clients, months, month, 
     ...entries.map((entry): Item => ({ kind: 'log', entry, date: entry.changeDate })),
     ...decidedThisMonth.map((test): Item => ({ kind: 'split', test, date: String(test.decidedAt).slice(0, 10) })),
   ].sort((a, b) => b.date.localeCompare(a.date));
+
+  // Deposits never come from the split-test beacons here. A beacon only fires if the payer
+  // comes back to the thank-you page, so it under-counts; the funnel's GHL record is the
+  // money actually taken. Direct only — a deposit a setter closed on the phone belongs to
+  // the call, not to the page being tested.
+  const metricsById = useMemo(() => new Map(metricsList.map(m => [m.funnel_id, m])), [metricsList]);
 
   const wins = entries.filter(e => e.verdict === 'win').length;
   const losses = entries.filter(e => e.verdict === 'loss').length;
@@ -118,7 +128,9 @@ export function OptimisationCadence({ entries, funnels, clients, months, month, 
 
       <MonthRhythm month={month} entries={entries} wins={wins} losses={losses} awaiting={awaiting} measuring={measuring} />
 
-      {running.length > 0 && <InFlight tests={running} since={since} until={until} />}
+      {running.length > 0 && (
+        <InFlight tests={running} since={since} until={until} metricsById={metricsById} />
+      )}
 
       {items.length === 0 ? (
         <EmptyMonth month={month} onLog={() => setEditing('new')} />
@@ -141,6 +153,7 @@ export function OptimisationCadence({ entries, funnels, clients, months, month, 
               last={i === items.length - 1}
               since={since}
               until={until}
+              metrics={metricsById.get(item.test.funnelId) ?? null}
             />
           ))}
         </div>
@@ -230,7 +243,9 @@ function MonthRhythm({ month, entries, wins, losses, awaiting, measuring }: {
  * above the timeline rather than in it, which is also where you want them during a monthly
  * review: this is what's still in flight and can't be judged yet.
  */
-function InFlight({ tests, since, until }: { tests: SplitTest[]; since: string; until: string }) {
+function InFlight({ tests, since, until, metricsById }: {
+  tests: SplitTest[]; since: string; until: string; metricsById: Map<string, FunnelMetrics>;
+}) {
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-surface">
       <div className="flex items-center gap-2 border-b border-border px-5 py-3">
@@ -241,35 +256,48 @@ function InFlight({ tests, since, until }: { tests: SplitTest[]; since: string; 
         <span className="ml-auto font-mono text-[11px] tabular-nums text-fg-dim">{tests.length}</span>
       </div>
       {tests.map(t => (
-        <a
-          key={t.funnelId}
-          href={`/?view=funnel&funnel=${encodeURIComponent(t.funnelId)}&since=${since}&until=${until}`}
-          className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border/50 px-5 py-3 transition-colors last:border-0 hover:bg-white/[0.02]"
-        >
-          <div className="min-w-[10rem] flex-1">
-            <div className="text-sm font-medium text-fg">{t.funnelName}</div>
-            <div className="mt-0.5 text-[11px] text-fg-dim">
-              {t.clientName} · comparing {t.primaryMetric === 'deposit' ? 'conversion rate' : 'opt-in rate'}
-            </div>
-          </div>
+        <InFlightTest key={t.funnelId} test={t} since={since} until={until} metrics={metricsById.get(t.funnelId) ?? null} />
+      ))}
+    </div>
+  );
+}
 
-          <div className="flex items-center gap-4">
-            {t.variants.map(v => (
-              <div key={v.key} className="text-right">
-                <div className="text-[9px] uppercase tracking-wider text-fg-dim">{v.label}</div>
-                <div className={cn(
-                  'mt-0.5 font-mono text-sm font-bold tabular-nums',
-                  t.leaderKey === v.key && t.totalViews > 0 ? 'text-pink' : 'text-fg',
-                )}>
-                  {formatNumber(v.views)}
-                </div>
-              </div>
-            ))}
-          </div>
+/**
+ * One running test: the full funnel for each version side by side, not just the traffic split.
+ *
+ * Views alone can't be read — a version "ahead" on visitors is ahead on nothing, and the rate
+ * that decides the test is invisible without the opt-ins under it. So each version shows its
+ * primary rate as a bar (compared on one scale, so the gap is seen before it's read) with the
+ * raw counts that produced it. Deposits ride along even while opt-in rate is the primary
+ * metric, because a version that wins opt-ins and loses deposits is a loss.
+ */
+function InFlightTest({ test: t, since, until, metrics }: {
+  test: SplitTest; since: string; until: string; metrics: FunnelMetrics | null;
+}) {
+  const isDeposit = t.primaryMetric === 'deposit';
+  const rateOf = (v: VariantStat) => (isDeposit ? v.depositRate : v.optinRate);
+  // Bars share one scale so two versions are compared, not each drawn against itself.
+  const scale = Math.max(...t.variants.map(v => (rateOf(v) ?? 0) * 100), 1);
+  const shortOn = t.variants.filter(v => v.views < SPLIT_MIN_VIEWS_PER_VARIANT);
+  const anyTrackedDeposits = t.variants.some(v => v.deposits > 0);
 
-          {/* Confidence is the only honest headline for a running test: a leader at 60% is
-              not a result, and showing an uplift without it invites calling it too early. */}
-          <div className="min-w-[7rem] text-right">
+  return (
+    <a
+      href={`/?view=funnel&funnel=${encodeURIComponent(t.funnelId)}&since=${since}&until=${until}`}
+      className="block border-b border-border/50 px-5 py-4 transition-colors last:border-0 hover:bg-white/[0.02]"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-fg">{t.funnelName}</div>
+          <div className="mt-0.5 text-[11px] text-fg-dim">
+            {t.clientName} · comparing {isDeposit ? 'conversion rate' : 'opt-in rate'}
+          </div>
+        </div>
+
+        {/* Confidence is the only honest headline for a running test: a leader at 60% is
+            not a result, and showing an uplift without it invites calling it too early. */}
+        <div className="flex shrink-0 items-center gap-1.5 text-right">
+          <div>
             {t.confidencePct == null ? (
               <span className="text-[11px] text-fg-dim">too early to read</span>
             ) : (
@@ -287,9 +315,82 @@ function InFlight({ tests, since, until }: { tests: SplitTest[]; since: string; 
             )}
           </div>
           <ChevronRight size={14} className="text-fg-dim" />
-        </a>
-      ))}
-    </div>
+        </div>
+      </div>
+
+      <div className="mt-3 space-y-2.5">
+        {t.variants.map(v => {
+          const leading = v.key === t.leaderKey && t.totalViews > 0;
+          return (
+            <div key={v.key} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className={cn(
+                'flex w-full shrink-0 items-center gap-1.5 text-[11px] sm:w-[9rem]',
+                leading ? 'text-fg' : 'text-fg-muted',
+              )}>
+                <span className="truncate">{v.label}</span>
+                {leading && (
+                  <span className="shrink-0 rounded bg-pink/10 px-1 py-0.5 text-[8px] font-bold uppercase tracking-wider text-pink">
+                    Ahead
+                  </span>
+                )}
+              </span>
+
+              <span className="h-2.5 min-w-[3rem] flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+                <span
+                  className={cn('block h-full rounded-full', leading ? 'bg-pink' : 'bg-white/25')}
+                  style={{ width: rateOf(v) == null ? '0%' : `${Math.max(2, Math.round((100 * (rateOf(v)! * 100)) / scale))}%` }}
+                />
+              </span>
+
+              <span className={cn(
+                'w-14 shrink-0 text-right font-mono text-sm font-bold tabular-nums',
+                leading ? 'text-pink' : 'text-fg-muted',
+              )}>
+                {rateOf(v) == null ? '—' : formatPercent(rateOf(v)! * 100)}
+              </span>
+
+              {/* The counts behind the rate — a percentage off 2 visitors is not a rate. */}
+              <span className="w-full shrink-0 font-mono text-[10px] tabular-nums text-fg-dim sm:w-[13rem] sm:text-right">
+                {plural(v.views, 'view')} · {plural(v.optins, 'opt-in')}
+                {/* Beacon deposits are shown only once there are any. A "0 deposits" on every
+                    row reads as a measured zero, when the real deposit figure is the funnel's
+                    GHL one below. */}
+                {anyTrackedDeposits && ` · ${plural(v.deposits, 'tracked deposit')}`}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* The money, from the funnel's own record rather than the versions'. GHL knows a
+          deposit was paid but not which version the payer saw, so this is the funnel as a
+          whole — said plainly, because a per-version deposit rate is what a reader will
+          assume otherwise. Direct only: setter-closed deposits belong to the call. */}
+      {metrics && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/60 pt-3 text-[11px]">
+          <span className="uppercase tracking-wider text-fg-dim">Funnel deposit rate · direct</span>
+          <span className="font-mono text-sm font-bold tabular-nums text-fg">
+            {formatPercent(metrics.deposit_rate_direct_pct)}
+          </span>
+          <span className="font-mono text-[10px] tabular-nums text-fg-dim">
+            {plural(metrics.deposits_direct, 'deposit')} from {plural(metrics.optins, 'opt-in')}
+          </span>
+          <span className="text-fg-dim/70">
+            · whole funnel, not split by version · {fmtShort(since)}–{fmtShort(until)}
+          </span>
+        </div>
+      )}
+
+      {/* Why it isn't callable yet, stated as the thing that has to happen next. */}
+      {!t.callable && (
+        <div className="mt-3 text-[11px] text-fg-dim">
+          {shortOn.length > 0
+            ? `Needs ${SPLIT_MIN_VIEWS_PER_VARIANT} views per version before it can be called — ${shortOn
+                .map(v => `${v.label} is on ${formatNumber(v.views)}`).join(', ')}.`
+            : `Both versions have the traffic; waiting for ${SPLIT_CONFIDENCE_TO_CALL}% confidence.`}
+        </div>
+      )}
+    </a>
   );
 }
 
@@ -301,14 +402,19 @@ function InFlight({ tests, since, until }: { tests: SplitTest[]; since: string; 
  * confounds cancelled out — re-deriving a verdict from consecutive weeks would replace
  * strong evidence with weak.
  */
-function DecidedTestRow({ test, first, last, since, until }: {
+function DecidedTestRow({ test, first, last, since, until, metrics }: {
   test: SplitTest; first: boolean; last: boolean; since: string; until: string;
+  metrics: FunnelMetrics | null;
 }) {
   const d = dayOf(String(test.decidedAt).slice(0, 10));
   const winner = test.variants.find(v => v.key === test.winnerKey) ?? null;
   const others = test.variants.filter(v => v.key !== test.winnerKey);
-  const rateOf = (v: typeof test.variants[number]) =>
-    test.primaryMetric === 'deposit' ? v.depositRate : v.optinRate;
+  // SplitTest rates are fractions; Bar (like every other metric on this page) is in percentage
+  // points. Feeding it 0.58 renders "0.6%" for a 58% opt-in rate.
+  const rateOf = (v: VariantStat) => {
+    const r = test.primaryMetric === 'deposit' ? v.depositRate : v.optinRate;
+    return r == null ? null : r * 100;
+  };
 
   // Calling a test is not the same as the winner having beaten anything. A test called with
   // no measurable gap — or on a hunch below the 95% bar — is a FLAT result: you picked a
@@ -389,6 +495,23 @@ function DecidedTestRow({ test, first, last, since, until }: {
             </div>
           </div>
         </div>
+
+        {/* What the funnel actually banked over the period, from GHL — the test measured the
+            page, this measures the money. Direct only; setter-closed deposits belong to the call. */}
+        {metrics && (
+          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+            <span className="uppercase tracking-wider text-fg-dim">Funnel deposit rate · direct</span>
+            <span className="font-mono text-sm font-bold tabular-nums text-fg">
+              {formatPercent(metrics.deposit_rate_direct_pct)}
+            </span>
+            <span className="font-mono text-[10px] tabular-nums text-fg-dim">
+              {plural(metrics.deposits_direct, 'deposit')} from {plural(metrics.optins, 'opt-in')}
+            </span>
+            <span className="text-fg-dim/70">
+            · whole funnel, not split by version · {fmtShort(since)}–{fmtShort(until)}
+          </span>
+          </div>
+        )}
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <span className={cn('inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider ring-1', tone.bg, tone.text, tone.ring)}>
@@ -590,12 +713,16 @@ function SecondaryRow({ before, after, metric, partial, elapsed }: {
 }) {
   if (!before && !after) return null;
 
-  const cells: Array<{ key: PrimaryMetric; label: string; fmt: (s: Snapshot) => string }> = [
+  // `key: null` = never the primary metric, so never filtered out. The direct deposit rate
+  // is shown on every entry precisely because it is not what the verdict is computed from:
+  // it's the check that a "win" on opt-ins actually reached the deposit page.
+  const cells: Array<{ key: PrimaryMetric | null; label: string; fmt: (s: Snapshot) => string }> = [
     { key: 'lp_views', label: 'LP views', fmt: s => (s.lpViews == null ? '—' : formatNumber(s.lpViews)) },
     { key: 'optins', label: 'Opt-ins', fmt: s => formatNumber(s.optins) },
     { key: 'optin_rate', label: 'Opt-in rate', fmt: s => formatPercent(s.optinRate) },
     { key: 'deposits', label: 'Deposits', fmt: s => formatNumber(s.deposits) },
     { key: 'deposit_rate', label: 'Conv. rate', fmt: s => formatPercent(s.depositRate) },
+    { key: null, label: 'Deposit rate · direct', fmt: s => `${formatPercent(s.depositRateDirect)} (${formatNumber(s.depositsDirect)})` },
   ];
 
   return (
