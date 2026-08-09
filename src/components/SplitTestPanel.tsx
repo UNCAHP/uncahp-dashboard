@@ -57,7 +57,17 @@ export function SplitTestPanel({ test, baseUrl }: { test: SplitTest; baseUrl: st
         </div>
       )}
 
-      <SnippetBar baseUrl={baseUrl} trackKey={test.trackKey} variantKeys={decided ? ['default'] : test.variants.map(v => v.key)} split={!decided} />
+      {/* Once called, the funnel ships the winning version alone — but it must keep reporting
+          under the WINNER'S key, not a fresh 'default' bucket. The funnel's entry still
+          declares both versions, and getSplitTests renders only declared keys, so events
+          under any other name are collected and never shown: the winner's numbers would
+          freeze on the day it was called while traffic carried on. */}
+      <SnippetBar
+        baseUrl={baseUrl}
+        trackKey={test.trackKey}
+        variantKeys={decided && winner ? [winner.key] : test.variants.map(v => v.key)}
+        split={!decided}
+      />
     </div>
   );
 }
@@ -318,7 +328,7 @@ function SnippetBar({ baseUrl, trackKey, variantKeys, split }: { baseUrl: string
         snippet={config}
         hint={split
           ? <>Add to the funnel&apos;s constants block. Claude wires the view / opt-in / deposit tracking and renders each version via <code className="rounded bg-surface px-1 font-mono">uncahpVariant()</code> from the funnel-builder spec.</>
-          : <>Add to the funnel&apos;s constants block. Claude wires the view / opt-in / deposit tracking from the funnel-builder spec — nothing else to change.</>}
+          : <>Declaring a winner changed this dashboard, not the live page — it still serves both versions until you ship. Paste this over the constants block, delete the losing branch so the winner renders inline, and redeploy. The key stays the winner&apos;s, so the funnel keeps reporting here.</>}
       />
     </div>
   );
