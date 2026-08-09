@@ -18,6 +18,7 @@ import { CallTrackingView, type CallOverviewRow, type CallDetail } from '@/compo
 import { BookingsView } from '@/components/BookingsView';
 import { AllBookingsView } from '@/components/AllBookingsView';
 import { KpisView } from '@/components/KpisView';
+import { getOptimisations, getOptimisationMonths, type OptimisationEntry } from '@/lib/optimisations';
 import { getSplitTests, type SplitTest } from '@/lib/splitTests';
 import { getBookings, getBookingMonths, getMonthCost, getAllBookings, getAllBookingMonths, type Booking, type BookingMonthCost } from '@/lib/bookingsAdmin';
 import { getCsrScorecard, getKpiMonths, getCsrDaily, getSheetSyncAgeHours, type CsrKpiRow, type CsrDayRow } from '@/lib/kpis';
@@ -36,7 +37,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
-type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string };
+type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; ftab?: string };
 
 function parseView(v: string | undefined): View {
   const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
@@ -138,6 +139,23 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     : [];
   const funnelMetricsList = await Promise.all(funnelsToShow.map(f => getFunnelMetrics(f, range)));
 
+  // Optimisation Cadence — the sub-page of Funnel Analytics. Each entry costs two
+  // getFunnelMetrics calls (the windows either side of the change), so it's scoped to one
+  // month and only loaded when that tab is actually open.
+  const ftab = params.ftab === 'cadence' ? 'cadence' : 'funnels';
+  let optimisations: OptimisationEntry[] = [];
+  let optimisationMonths: string[] = [];
+  let optimisationMonth: string | null = null;
+  if (view === 'funnel' && ftab === 'cadence') {
+    optimisationMonths = await getOptimisationMonths();
+    // Default to the current month so a freshly logged change is visible straight away,
+    // even before any month has entries.
+    const thisMonth = `${new Date().toISOString().slice(0, 7)}-01`;
+    if (!optimisationMonths.includes(thisMonth)) optimisationMonths = [thisMonth, ...optimisationMonths];
+    optimisationMonth = params.month && optimisationMonths.includes(params.month) ? params.month : optimisationMonths[0];
+    optimisations = await getOptimisations(optimisationMonth, adminFunnels);
+  }
+
   // Call Tracking. Overview = a light per-client summary card; drilling in (?client=)
   // computes the full setter breakdown + charts for one client. Only on the calls view.
   let callsOverview: CallOverviewRow[] = [];
@@ -238,6 +256,10 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
             selectedFunnelId={selectedFunnel?.id ?? null}
             since={range.since}
             until={range.until}
+            ftab={ftab}
+            optimisations={optimisations}
+            optimisationMonths={optimisationMonths}
+            optimisationMonth={optimisationMonth}
           />
         )}
         {view === 'calls' && (

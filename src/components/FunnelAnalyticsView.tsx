@@ -6,7 +6,9 @@ import { Eye, MousePointerClick, Landmark, ExternalLink, FlaskConical, SplitSqua
 import type { ClientOption, FunnelMetrics } from '@/lib/queries';
 import type { AdminFunnel, FunnelPageLink } from '@/lib/funnelAdmin';
 import type { SplitTest } from '@/lib/splitTests';
+import type { OptimisationEntry } from '@/lib/optimisations';
 import { FunnelFormModal } from '@/components/FunnelsManager';
+import { OptimisationCadence } from '@/components/OptimisationCadence';
 import { SplitTestPanel, TrackingPanel } from '@/components/SplitTestPanel';
 import { setFunnelStatusAction, deleteFunnelAction } from '@/app/actions/funnels';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
@@ -22,10 +24,16 @@ type Props = {
   selectedFunnelId: string | null;
   since: string;
   until: string;
+  // Optimisation cadence sub-page
+  ftab: 'funnels' | 'cadence';
+  optimisations: OptimisationEntry[];
+  optimisationMonths: string[];
+  optimisationMonth: string | null;
 };
 
 export function FunnelAnalyticsView({
   clients, adminFunnels, metricsList, splitTests, baseUrl, funnelStatus, selectedFunnelId, since, until,
+  ftab, optimisations, optimisationMonths, optimisationMonth,
 }: Props) {
   const router = useRouter();
   const [editing, setEditing] = useState<AdminFunnel | 'new' | null>(null);
@@ -45,6 +53,12 @@ export function FunnelAnalyticsView({
     if (next.funnel) params.set('funnel', next.funnel);
     const fs = next.fstatus ?? funnelStatus;
     if (fs === 'archived') params.set('fstatus', 'archived');
+    router.push(`/?${params.toString()}`);
+  };
+
+  const goTab = (tab: 'funnels' | 'cadence') => {
+    const params = new URLSearchParams({ view: 'funnel', since, until });
+    if (tab === 'cadence') params.set('ftab', 'cadence');
     router.push(`/?${params.toString()}`);
   };
 
@@ -78,15 +92,41 @@ export function FunnelAnalyticsView({
             LP views (Meta) → opt-ins → deposits (GHL tags), per registered funnel.
           </p>
         </div>
-        <button
-          onClick={() => setEditing('new')}
-          className="inline-flex items-center gap-2 rounded-lg bg-pink px-3.5 py-2 text-sm font-semibold text-black transition-colors hover:bg-pink-soft"
-        >
-          <Plus size={16} /> Add funnel
-        </button>
+        {ftab === 'funnels' && (
+          <button
+            onClick={() => setEditing('new')}
+            className="inline-flex items-center gap-2 rounded-lg bg-pink px-3.5 py-2 text-sm font-semibold text-black transition-colors hover:bg-pink-soft"
+          >
+            <Plus size={16} /> Add funnel
+          </button>
+        )}
       </div>
 
-      {detail ? (
+      {/* Sub-page tabs. Selecting a funnel drills into it from the Funnels tab, so the
+          tabs stay visible there too — they're how you get back out to the cadence log. */}
+      <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+        {([['funnels', 'Funnels'], ['cadence', 'Optimisation Cadence']] as const).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => goTab(id)}
+            className={cn('rounded-md px-3 py-1.5 text-xs font-medium transition-colors', ftab === id ? 'bg-pink text-black' : 'text-fg-muted hover:text-fg')}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {ftab === 'cadence' ? (
+        <OptimisationCadence
+          entries={optimisations}
+          funnels={adminFunnels}
+          clients={clients}
+          months={optimisationMonths}
+          month={optimisationMonth}
+          since={since}
+          until={until}
+        />
+      ) : detail ? (
         <>
           <div className="flex items-center justify-between gap-3">
             <button onClick={() => navigate({})} className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-pink">
