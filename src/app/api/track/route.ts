@@ -10,10 +10,29 @@ const ALLOWED = (process.env.FUNNEL_ORIGINS ?? '')
 const BOT = /bot|crawl|spider|slurp|bingpreview|facebookexternalhit|headless|lighthouse|pingdom|uptime|monitor|preview/i;
 const EVENTS = new Set(['view', 'optin', 'deposit']);
 
+/**
+ * Is this beacon coming from one of our funnels?
+ *
+ * FUNNEL_ORIGINS entries are either an exact host ("salonhouse.uncahp.com") or a whole
+ * domain written with a leading dot ("​.uncahp.com"), which matches the domain and every
+ * subdomain under it. The domain form matters: every funnel lives on its own
+ * <clinic>.uncahp.com subdomain, so an exact list would go stale the moment a new funnel
+ * launches — and it would fail silently, since the collector drops rejected beacons
+ * without an error the funnel could show.
+ */
 function originAllowed(origin: string | null): boolean {
   if (ALLOWED.length === 0) return true;                 // unconfigured → accept (dev / initial setup)
   if (!origin) return false;
-  try { return ALLOWED.includes(new URL(origin).host.toLowerCase()); } catch { return false; }
+  try {
+    const host = new URL(origin).host.toLowerCase();
+    return ALLOWED.some(entry => (
+      entry.startsWith('.')
+        // ".uncahp.com" → uncahp.com itself, plus anything.uncahp.com. Compared against the
+        // dotted suffix so "notuncahp.com" can't sneak in.
+        ? host === entry.slice(1) || host.endsWith(entry)
+        : host === entry
+    ));
+  } catch { return false; }
 }
 
 // Beacons are text/plain (no CORS preflight); reflect the origin so a fetch fallback works too.
