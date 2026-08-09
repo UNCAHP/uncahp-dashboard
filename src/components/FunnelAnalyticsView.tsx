@@ -126,7 +126,6 @@ export function FunnelAnalyticsView({
           since={since}
           until={until}
           splitTests={splitTests}
-          metricsList={metricsList}
         />
       ) : detail ? (
         <>
