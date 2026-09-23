@@ -61,13 +61,23 @@ export function FunnelFormModal({
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
   const [sources, setSources] = useState<SourceOption[]>([]);
   const [loadingData, startLoad] = useTransition();
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     startLoad(async () => {
-      const data = await loadFunnelFormData(clientId);
-      setTags(data.tags);
-      setCampaigns(data.campaigns);
-      setSources(data.sources);
+      setLoadError(false);
+      // A failed loader must not take the whole page down: the pickers accept free text,
+      // so the form stays usable with empty suggestion lists and a warning.
+      try {
+        const data = await loadFunnelFormData(clientId);
+        setTags(data.tags);
+        setCampaigns(data.campaigns);
+        setSources(data.sources);
+      } catch (e) {
+        console.error('loadFunnelFormData failed:', e);
+        setTags([]); setCampaigns([]); setSources([]);
+        setLoadError(true);
+      }
     });
   }, [clientId]);
 
@@ -101,6 +111,12 @@ export function FunnelFormModal({
         <input type="hidden" name="track_key" value={trackKey} />
         <input type="hidden" name="variants" value={variantsSerialized} />
         <input type="hidden" name="split_status" value={splitStatus} />
+
+        {loadError && (
+          <div className="rounded-lg border border-yellow/30 bg-yellow/10 px-3 py-2 text-xs text-yellow">
+            Couldn&apos;t load this client&apos;s tag, payment-source and campaign suggestions. You can still type tags and sources by name and save.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Client" required>

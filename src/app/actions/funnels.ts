@@ -200,10 +200,15 @@ export async function deleteFunnelAction(id: string): Promise<ActionState> {
 // Called from the form when a client is chosen, to populate the tag + campaign pickers.
 export async function loadFunnelFormData(clientId: string): Promise<{ tags: TagOption[]; campaigns: CampaignOption[]; sources: SourceOption[] }> {
   if (!clientId) return { tags: [], campaigns: [], sources: [] };
-  const [tags, campaigns, sources] = await Promise.all([
-    getClientTags(clientId),
-    getClientCampaigns(clientId),
-    getClientTransactionSources(clientId),
-  ]);
-  return { tags, campaigns, sources };
+  try {
+    const [tags, campaigns, sources] = await Promise.all([
+      getClientTags(clientId),
+      getClientCampaigns(clientId),
+      getClientTransactionSources(clientId),
+    ]);
+    return { tags, campaigns, sources };
+  } catch (e) {
+    console.error('loadFunnelFormData failed:', e);
+    return { tags: [], campaigns: [], sources: [] };
+  }
 }
