@@ -2,6 +2,13 @@ import type { NextConfig } from 'next';
 import path from 'node:path';
 
 const nextConfig: NextConfig = {
+  // sharp (client logo resizing) is a native module. Keep it external to the bundle and make
+  // sure its platform binaries — the @img/* optional packages, including libvips — are traced
+  // into the Vercel function, otherwise it fails at runtime with "libvips-cpp.so: cannot open".
+  serverExternalPackages: ['sharp'],
+  outputFileTracingIncludes: {
+    '/': ['./node_modules/sharp/**/*', './node_modules/@img/**/*'],
+  },
   turbopack: {
     root: path.resolve(__dirname),
   },

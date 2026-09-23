@@ -1,7 +1,6 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import sharp from 'sharp';
 import { supabaseAdmin } from '@/lib/supabase';
 
 export type ActionState = { ok: boolean; error?: string };
@@ -79,6 +78,10 @@ async function handleLogoUpload(fd: FormData): Promise<{ url: string | null; err
   }
 
   try {
+    // Loaded on demand: sharp is a native module, and importing it at the top of this file
+    // pulls it into the shared server-actions chunk — so if its Linux binaries are missing
+    // on Vercel, EVERY server action (funnel edits included) fails, not just logo uploads.
+    const { default: sharp } = await import('sharp');
     const out = await sharp(input)
       .resize(LOGO_MAX_DIMENSION, LOGO_MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
       .webp({ quality: 80 })
