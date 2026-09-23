@@ -5,6 +5,7 @@ import { Trophy, Copy, Check, SplitSquareHorizontal, Info, Radio, Gauge, Hourgla
 import { setSplitTestStatus, declareSplitWinner, reopenSplitTest } from '@/app/actions/splitTests';
 import type { SplitTest, VariantStat } from '@/lib/splitTests';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
+import { StageFlow, STAGE_ICONS, type Stage } from '@/components/FunnelStages';
 
 // The Split Test panel shown on a funnel's detail view: a verdict + confidence-to-95%
 // read, a head-to-head of each version as its own funnel, and the config to paste.
@@ -35,7 +36,7 @@ export function SplitTestPanel({ test, baseUrl }: { test: SplitTest; baseUrl: st
       ) : hasData ? (
         <>
           <Verdict test={test} leader={leader} primaryLabel={primaryLabel} />
-          <div className={cn('mt-4 grid gap-3', test.variants.length > 2 ? 'sm:grid-cols-2 lg:grid-cols-3' : 'sm:grid-cols-2')}>
+          <div className="mt-4 space-y-3">
             {test.variants.map(v => (
               <VersionColumn
                 key={v.key}
@@ -90,19 +91,26 @@ function DecidedFlow({ test, winner, primaryLabel }: { test: SplitTest; winner: 
         </div>
       </div>
 
-      <div className="mt-4 rounded-xl border border-border bg-bg p-4">
+      <div className="mt-4 rounded-xl border border-green/50 bg-green/5 p-4">
         <div className="flex items-baseline gap-1.5">
-          <span className="font-mono text-3xl font-bold tabular-nums text-fg">{heroRate != null ? formatPercent(heroRate * 100, 1) : '—'}</span>
+          <span className="font-mono text-3xl font-bold tabular-nums text-green">{heroRate != null ? formatPercent(heroRate * 100, 1) : '—'}</span>
           <span className="text-[11px] text-fg-dim">{primaryLabel} rate · {winner.label}</span>
         </div>
-        <div className="mt-4 grid grid-cols-3 divide-x divide-border rounded-lg border border-border">
-          <StageStat label="Views" value={winner.views} />
-          <StageStat label="Opt-ins" value={winner.optins} rate={winner.optinRate} />
-          <StageStat label="Deposits" value={winner.deposits} rate={winner.depositRate} accent="pink" />
+        <div className="mt-4">
+          <StageFlow stages={variantStages(winner)} accent="green" compact />
         </div>
       </div>
     </div>
   );
+}
+
+// A version's views → opt-ins → deposits, in the same shape the funnel detail uses.
+function variantStages(v: VariantStat): Stage[] {
+  return [
+    { key: 'views', label: 'Views', icon: STAGE_ICONS.views, value: v.views, caption: 'first-party · landing page' },
+    { key: 'optins', label: 'Opt-ins', icon: STAGE_ICONS.optins, value: v.optins, caption: v.optinRate != null ? `${formatPercent(v.optinRate * 100, 1)} of views` : 'No views yet' },
+    { key: 'deposits', label: 'Deposits', icon: STAGE_ICONS.deposits, value: v.deposits, caption: v.depositRate != null ? `${formatPercent(v.depositRate * 100, 1)} of views` : 'No views yet' },
+  ];
 }
 
 // Measure-only funnels (no A/B): show the accumulating first-party counts as a Meta backup.
@@ -214,30 +222,30 @@ function VersionColumn({ v, funnelId, primaryMetric, isWinner, isLeader, recomme
   const heroRate = primaryMetric === 'deposit' ? v.depositRate : v.optinRate;
   const heroLabel = primaryMetric === 'deposit' ? 'deposit rate' : 'opt-in rate';
   return (
-    <div className={cn('flex flex-col rounded-xl border p-4', isWinner ? 'border-green/50 bg-green/5' : 'border-border bg-bg')}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold text-fg">{v.label}</span>
-        {isWinner ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-green/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-green"><Trophy size={11} /> Winner</span>
-        ) : isLeader ? (
-          <span className="rounded-full bg-border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-fg-dim">Leading</span>
-        ) : null}
+    <div className={cn('rounded-xl border p-4', isWinner ? 'border-green/50 bg-green/5' : 'border-border bg-bg')}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-semibold text-fg">{v.label}</span>
+          {isWinner ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-green/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-green"><Trophy size={11} /> Winner</span>
+          ) : isLeader ? (
+            <span className="rounded-full bg-border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-fg-dim">Leading</span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="flex items-baseline gap-1.5">
+            <span className={cn('font-mono text-2xl font-bold tabular-nums', isWinner ? 'text-green' : 'text-fg')}>
+              {heroRate != null ? formatPercent(heroRate * 100, 1) : '—'}
+            </span>
+            <span className="text-[11px] text-fg-dim">{heroLabel}</span>
+          </div>
+          <DeclareButton funnelId={funnelId} variantKey={v.key} variantLabel={v.label} recommended={recommended} />
+        </div>
       </div>
 
-      <div className="mt-2 flex items-baseline gap-1.5">
-        <span className={cn('font-mono text-3xl font-bold tabular-nums', isWinner ? 'text-green' : 'text-fg')}>
-          {heroRate != null ? formatPercent(heroRate * 100, 1) : '—'}
-        </span>
-        <span className="text-[11px] text-fg-dim">{heroLabel}</span>
+      <div className="mt-4">
+        <StageFlow stages={variantStages(v)} accent={isWinner ? 'green' : 'pink'} compact />
       </div>
-
-      <div className="mt-4 grid grid-cols-3 divide-x divide-border rounded-lg border border-border">
-        <StageStat label="Views" value={v.views} />
-        <StageStat label="Opt-ins" value={v.optins} rate={v.optinRate} />
-        <StageStat label="Deposits" value={v.deposits} rate={v.depositRate} accent={isWinner ? 'green' : 'pink'} />
-      </div>
-
-      <DeclareButton funnelId={funnelId} variantKey={v.key} variantLabel={v.label} recommended={recommended} />
     </div>
   );
 }
@@ -255,7 +263,7 @@ function DeclareButton({ funnelId, variantKey, variantLabel, recommended }: { fu
       onClick={declare}
       disabled={pending}
       className={cn(
-        'mt-3 w-full rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50',
+        'shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50',
         recommended
           ? 'bg-green/15 text-green hover:bg-green/25'
           : 'border border-border text-fg-muted hover:border-border-strong hover:text-fg',
@@ -279,17 +287,6 @@ function DecidedControl({ funnelId }: { funnelId: string }) {
       >
         {pending ? 'Reopening…' : 'Reopen test'}
       </button>
-    </div>
-  );
-}
-
-function StageStat({ label, value, rate, accent }: { label: string; value: number; rate?: number | null; accent?: 'green' | 'pink' }) {
-  const valColor = accent === 'green' ? 'text-green' : accent === 'pink' ? 'text-pink' : 'text-fg';
-  return (
-    <div className="px-3 py-2.5">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-fg-muted">{label}</div>
-      <div className={cn('mt-0.5 font-mono text-base font-bold tabular-nums', valColor)}>{formatNumber(value)}</div>
-      <div className="text-[10px] tabular-nums text-fg-dim">{rate != null ? `${formatPercent(rate * 100, 1)} of views` : ' '}</div>
     </div>
   );
 }

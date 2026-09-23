@@ -2,7 +2,7 @@
 
 import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, MousePointerClick, Landmark, ExternalLink, FlaskConical, SplitSquareHorizontal, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle, Search, Trash2 } from 'lucide-react';
+import { ExternalLink, FlaskConical, SplitSquareHorizontal, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle, Search, Trash2 } from 'lucide-react';
 import type { ClientOption, FunnelMetrics } from '@/lib/queries';
 import type { AdminFunnel, FunnelPageLink } from '@/lib/funnelAdmin';
 import type { SplitTest } from '@/lib/splitTests';
@@ -10,6 +10,7 @@ import type { OptimisationEntry } from '@/lib/optimisations';
 import { FunnelFormModal } from '@/components/FunnelsManager';
 import { OptimisationCadence } from '@/components/OptimisationCadence';
 import { SplitTestPanel, TrackingPanel } from '@/components/SplitTestPanel';
+import { StageFlow, STAGE_ICONS, type Stage } from '@/components/FunnelStages';
 import { setFunnelStatusAction, deleteFunnelAction } from '@/app/actions/funnels';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
@@ -32,7 +33,7 @@ type Props = {
 };
 
 export function FunnelAnalyticsView({
-  clients, adminFunnels, metricsList, splitTests, baseUrl, funnelStatus, selectedFunnelId, since, until,
+  clients, adminFunnels, metricsList: rawMetricsList, splitTests, baseUrl, funnelStatus, selectedFunnelId, since, until,
   ftab, optimisations, optimisationMonths, optimisationMonth,
 }: Props) {
   const router = useRouter();
@@ -41,7 +42,9 @@ export function FunnelAnalyticsView({
 
   const clientInfo = new Map(clients.map(c => [c.client_id, c]));
   const splitByFunnel = new Map(splitTests.map(t => [t.funnelId, t]));
-  const trackingMode = new Map(splitTests.map(t => [t.funnelId, t.mode]));
+  // A running split test's first-party counts replace Meta LP views and GHL tags everywhere
+  // in this view (list cards, totals, detail), so the numbers agree with the split test panel.
+  const metricsList = rawMetricsList.map(m => applySplitTotals(m, splitByFunnel.get(m.funnel_id)));
   const selectedAdmin = selectedFunnelId ? adminFunnels.find(f => f.id === selectedFunnelId) ?? null : null;
   const selectedTest = selectedFunnelId ? splitByFunnel.get(selectedFunnelId) ?? null : null;
 
@@ -151,7 +154,7 @@ export function FunnelAnalyticsView({
               </div>
             )}
           </div>
-          <MetricsPanel metrics={detail} clientName={clientInfo.get(detail.client_id)?.client_name ?? ''} logoUrl={clientInfo.get(detail.client_id)?.logo_url ?? null} />
+          <MetricsPanel metrics={detail} splitTest={selectedTest} clientName={clientInfo.get(detail.client_id)?.client_name ?? ''} logoUrl={clientInfo.get(detail.client_id)?.logo_url ?? null} />
           {selectedTest ? (
             selectedTest.mode === 'test'
               ? <SplitTestPanel test={selectedTest} baseUrl={baseUrl} />
@@ -190,7 +193,7 @@ export function FunnelAnalyticsView({
               <TotalSum label={`${funnelStatus === 'active' ? 'Active' : 'Inactive'} deposits`} value={formatNumber(sums.deposits)} accent />
             </div>
           </div>
-          <Overview metricsList={filtered} clientInfo={clientInfo} status={funnelStatus} trackingMode={trackingMode} onOpen={fid => navigate({ funnel: fid })} />
+          <Overview metricsList={filtered} clientInfo={clientInfo} status={funnelStatus} splitByFunnel={splitByFunnel} onOpen={fid => navigate({ funnel: fid })} />
         </>
       )}
 
@@ -273,12 +276,12 @@ function DeleteButton({ funnelId, funnelName, onDone }: { funnelId: string; funn
 // ─── Overview (all funnels, grouped by client) ───────────────────────────────
 
 function Overview({
-  metricsList, clientInfo, status, trackingMode, onOpen,
+  metricsList, clientInfo, status, splitByFunnel, onOpen,
 }: {
   metricsList: FunnelMetrics[];
   clientInfo: Map<string, ClientOption>;
   status: 'active' | 'archived';
-  trackingMode: Map<string, 'measure' | 'test'>;
+  splitByFunnel: Map<string, SplitTest>;
   onOpen: (funnelId: string) => void;
 }) {
   if (metricsList.length === 0) {
@@ -302,13 +305,13 @@ function Overview({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {sorted.map(m => (
-        <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} mode={trackingMode.get(m.funnel_id)} onClick={() => onOpen(m.funnel_id)} />
+        <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} mode={splitByFunnel.get(m.funnel_id)?.mode} combined={!!splitTotals(splitByFunnel.get(m.funnel_id))} onClick={() => onOpen(m.funnel_id)} />
       ))}
     </div>
   );
 }
 
-function FunnelSummaryCard({ m, client, mode, onClick }: { m: FunnelMetrics; client?: ClientOption; mode?: 'measure' | 'test'; onClick: () => void }) {
+function FunnelSummaryCard({ m, client, mode, combined, onClick }: { m: FunnelMetrics; client?: ClientOption; mode?: 'measure' | 'test'; combined: boolean; onClick: () => void }) {
   return (
     <button onClick={onClick} className="group flex flex-col rounded-2xl border border-border bg-surface p-5 text-left transition-colors hover:border-border-strong">
       <div className="flex items-start justify-between gap-2">
@@ -336,7 +339,7 @@ function FunnelSummaryCard({ m, client, mode, onClick }: { m: FunnelMetrics; cli
               ) : null}
             </div>
             <div className="mt-0.5 text-[11px] text-fg-dim">
-              {m.meta_campaign_count} campaign{m.meta_campaign_count === 1 ? '' : 's'} · {m.pages.length} page{m.pages.length === 1 ? '' : 's'}
+              {combined ? 'First-party · all versions' : `${m.meta_campaign_count} campaign${m.meta_campaign_count === 1 ? '' : 's'}`} · {m.pages.length} page{m.pages.length === 1 ? '' : 's'}
             </div>
           </div>
         </div>
@@ -374,22 +377,53 @@ function Mini({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
+// Combined first-party totals across every version of a running split test, or null when
+// the funnel has no test running (or no visits yet).
+function splitTotals(test?: SplitTest | null) {
+  if (!test || test.mode !== 'test' || test.totalViews === 0) return null;
+  return {
+    views: test.totalViews,
+    optins: test.variants.reduce((s, v) => s + v.optins, 0),
+    deposits: test.variants.reduce((s, v) => s + v.deposits, 0),
+    versions: test.variants.length,
+  };
+}
+
+function applySplitTotals(m: FunnelMetrics, test?: SplitTest): FunnelMetrics {
+  const t = splitTotals(test);
+  if (!t) return m;
+  const rate = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 1000) / 10 : null);
+  return {
+    ...m,
+    lp_views: t.views,
+    optins: t.optins,
+    deposits: t.deposits,
+    deposits_direct: t.deposits,
+    deposits_setter: 0,
+    setter_sources: [],
+    optin_rate_pct: rate(t.optins, t.views),
+    deposit_rate_pct: rate(t.deposits, t.optins),
+    deposit_rate_direct_pct: rate(t.deposits, t.optins),
+  };
+}
+
 // ─── Detail (single funnel) ──────────────────────────────────────────────────
 
-function MetricsPanel({ metrics: m, clientName, logoUrl }: { metrics: FunnelMetrics; clientName: string; logoUrl: string | null }) {
-  const top = m.lp_views && m.lp_views > 0 ? m.lp_views : Math.max(m.optins, m.deposits, 1);
-  const share = (v: number | null) => (v == null ? null : Math.round((v / top) * 1000) / 10);
-
+function MetricsPanel({ metrics: m, splitTest, clientName, logoUrl }: { metrics: FunnelMetrics; splitTest: SplitTest | null; clientName: string; logoUrl: string | null }) {
   const setterNote = m.setter_sources.length ? `+${m.setter_sources.length} phone source${m.setter_sources.length === 1 ? '' : 's'} (tag-verified)` : '';
   const depositCaption = m.deposit_sources.length
     ? [m.deposit_sources.join(' · '), setterNote].filter(Boolean).join(' · ')
     : (setterNote || 'No deposit source set');
 
-  const stages = [
-    { key: 'lpv', label: 'LP Views', icon: Eye, value: m.lp_views, tags: m.meta_campaign_count ? `${m.meta_campaign_count} campaign${m.meta_campaign_count === 1 ? '' : 's'}` : 'No campaigns mapped' },
-    { key: 'opt', label: 'Opt-ins', icon: MousePointerClick, value: m.optins, tags: m.optin_tags.length ? m.optin_tags.join(' · ') : 'No opt-in tags' },
-    { key: 'dep', label: 'Deposits', icon: Landmark, value: m.deposits, tags: depositCaption },
-  ] as const;
+  const combined = splitTotals(splitTest);
+  const fpCaption = combined ? `first-party · ${combined.versions} versions combined` : '';
+
+  const stages: Stage[] = [
+    { key: 'lpv', label: 'LP Views', icon: STAGE_ICONS.views, value: m.lp_views, caption: combined ? fpCaption : m.meta_campaign_count ? `${m.meta_campaign_count} campaign${m.meta_campaign_count === 1 ? '' : 's'}` : 'No campaigns mapped' },
+    { key: 'opt', label: 'Opt-ins', icon: STAGE_ICONS.optins, value: m.optins, caption: combined ? fpCaption : m.optin_tags.length ? m.optin_tags.join(' · ') : 'No opt-in tags' },
+    { key: 'dep', label: 'Deposits', icon: STAGE_ICONS.deposits, value: m.deposits, caption: combined ? fpCaption : depositCaption,
+      breakdown: m.setter_sources.length > 0 ? [{ label: 'Funnel', value: m.deposits_direct }, { label: 'Phone', value: m.deposits_setter }] : undefined },
+  ];
 
   return (
     <div className="space-y-5">
@@ -420,29 +454,16 @@ function MetricsPanel({ metrics: m, clientName, logoUrl }: { metrics: FunnelMetr
       </div>
 
       <div className="rounded-2xl border border-border bg-surface p-6">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
-          {stages.map((s, i) => (
-            <Fragment key={s.key}>
-              <StageCard
-                label={s.label}
-                icon={s.icon}
-                value={s.value}
-                share={share(s.value)}
-                widthPct={s.value == null ? 0 : Math.max(4, share(s.value) ?? 0)}
-                tags={s.tags}
-                breakdown={s.key === 'dep' && m.setter_sources.length > 0
-                  ? [{ label: 'Funnel', value: m.deposits_direct }, { label: 'Phone', value: m.deposits_setter }]
-                  : undefined}
-              />
-              {i < stages.length - 1 && (
-                <StageConnector pct={i === 0 ? m.optin_rate_pct : m.deposit_rate_pct} dropped={s.value != null && stages[i + 1].value != null ? s.value - (stages[i + 1].value as number) : null} />
-              )}
-            </Fragment>
-          ))}
-        </div>
+        {combined && (
+          <div className="mb-4 flex items-center gap-2 text-[11px] text-fg-dim">
+            <SplitSquareHorizontal size={13} className="text-pink" />
+            Split test running — showing first-party tracking, all versions combined.
+          </div>
+        )}
+        <StageFlow stages={stages} />
       </div>
 
-      {m.lp_views == null && (
+      {m.lp_views == null && !combined && (
         <div className="rounded-xl border border-yellow/30 bg-yellow/10 px-4 py-2.5 text-xs text-yellow">
           No Meta campaigns are mapped to this funnel, so LP views (and the rates based on them) can’t be calculated. Add campaigns under “Manage funnels”.
         </div>
@@ -481,61 +502,6 @@ function Headline({ label, value, accent }: { label: string; value: string; acce
     <div className="text-right sm:text-left">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">{label}</div>
       <div className={cn('mt-0.5 font-mono text-3xl font-bold tabular-nums', accent ? 'text-pink' : 'text-fg')}>{value}</div>
-    </div>
-  );
-}
-
-function StageCard({
-  label, icon: Icon, value, share, widthPct, tags, breakdown,
-}: {
-  label: string;
-  icon: typeof Eye;
-  value: number | null;
-  share: number | null;
-  widthPct: number;
-  tags: string;
-  breakdown?: { label: string; value: number }[];
-}) {
-  return (
-    <div className="flex min-w-0 flex-1 flex-col rounded-xl border border-border bg-surface-2/30 p-5">
-      <div className="flex items-center gap-2">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2"><Icon size={15} className="text-pink" /></div>
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">{label}</span>
-      </div>
-      <div className="mt-3 flex items-baseline gap-2">
-        <span className="font-mono text-3xl font-bold tabular-nums text-fg">{value == null ? '—' : formatNumber(value)}</span>
-        {share != null && <span className="text-xs tabular-nums text-fg-dim">{share}%</span>}
-      </div>
-      {breakdown && (
-        <div className="mt-2.5 flex gap-2">
-          {breakdown.map(b => (
-            <div key={b.label} className="flex flex-1 flex-col items-center gap-0.5 rounded-lg border border-border/60 bg-surface-2/40 px-2.5 py-2">
-              <span className="text-[9px] font-medium uppercase tracking-wide text-fg-muted">{b.label}</span>
-              <span className="font-mono text-base font-bold tabular-nums text-fg">{formatNumber(b.value)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="mt-1 truncate text-[11px] text-fg-dim" title={tags}>{tags}</div>
-      <div className="mt-auto pt-4">
-        <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
-          <div className="h-full rounded-full bg-gradient-to-r from-pink/70 to-pink transition-[width] duration-500" style={{ width: `${widthPct}%` }} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StageConnector({ pct, dropped }: { pct: number | null; dropped: number | null }) {
-  return (
-    <div className="flex shrink-0 items-center justify-center gap-2 lg:w-24 lg:flex-col lg:gap-1">
-      <ArrowDown size={16} className="text-fg-dim lg:hidden" />
-      <ArrowRight size={18} className="hidden text-fg-dim lg:block" />
-      <div className="text-center">
-        <div className="text-sm font-bold text-pink">{pct == null ? '—' : `${pct}%`}</div>
-        <div className="text-[9px] uppercase tracking-wide text-fg-dim">continue</div>
-        {dropped != null && dropped > 0 && <div className="text-[9px] text-fg-dim">−{formatNumber(dropped)}</div>}
-      </div>
     </div>
   );
 }
