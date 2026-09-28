@@ -323,11 +323,44 @@ function Overview({
     return an.localeCompare(bn) || a.funnel_name.localeCompare(b.funnel_name);
   });
 
-  return (
+  // Funnels mid-split-test are a different kind of thing from a settled funnel — their
+  // numbers are a blend of versions — so they get their own section at the top.
+  const testing = sorted.filter(m => { const t = splitByFunnel.get(m.funnel_id); return t?.mode === 'test' && t.status === 'running'; });
+  const settled = sorted.filter(m => !testing.includes(m));
+
+  const grid = (list: FunnelMetrics[]) => (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {sorted.map(m => (
+      {list.map(m => (
         <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} mode={splitByFunnel.get(m.funnel_id)?.mode} combined={!!splitTotals(splitByFunnel.get(m.funnel_id))} onClick={() => onOpen(m.funnel_id)} />
       ))}
+    </div>
+  );
+
+  if (testing.length === 0) return grid(settled);
+
+  return (
+    <div className="space-y-8">
+      <section>
+        <SectionHeading icon={SplitSquareHorizontal} title="Running split tests" count={testing.length} hint="Comparing versions · not in totals" />
+        {grid(testing)}
+      </section>
+      {settled.length > 0 && (
+        <section>
+          <SectionHeading icon={FlaskConical} title="Funnels" count={settled.length} />
+          {grid(settled)}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function SectionHeading({ icon: Icon, title, count, hint }: { icon: typeof FlaskConical; title: string; count: number; hint?: string }) {
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <Icon size={14} className="text-pink" />
+      <span className="text-sm font-semibold text-fg">{title}</span>
+      <span className="rounded-full bg-border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-fg-dim">{count}</span>
+      {hint && <span className="text-[11px] text-fg-dim">· {hint}</span>}
     </div>
   );
 }
