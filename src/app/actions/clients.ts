@@ -12,6 +12,15 @@ const LOGO_MAX_DIMENSION = 128;
 const MAX_LOGO_BYTES = 15 * 1024 * 1024; // 15MB source cap
 
 // Trim a form field down to a non-empty string, or null.
+// 'b2c' unless the form explicitly says 'b2b'.
+function segmentField(fd: FormData): 'b2c' | 'b2b' {
+  return field(fd, 'segment') === 'b2b' ? 'b2b' : 'b2c';
+}
+
+// The segment column arrives with migration 0017. If it isn't there yet, retry the write
+// without it so client edits keep working; the segment just won't be saved until then.
+const MISSING_SEGMENT = /segment/i;
+
 function field(fd: FormData, name: string): string | null {
   const v = (fd.get(name) ?? '').toString().trim();
   return v.length ? v : null;
@@ -103,7 +112,7 @@ export async function createClientAction(_prev: ActionState, fd: FormData): Prom
     const ghl_location_id = field(fd, 'ghl_location_id');
     const ghl_api_key = field(fd, 'ghl_api_key');
 
-    const { error } = await supabaseAdmin.from('clients').insert({
+    const row = {
       client_name,
       status: 'active',
       meta_ad_account_id: field(fd, 'meta_ad_account_id'),
@@ -111,7 +120,9 @@ export async function createClientAction(_prev: ActionState, fd: FormData): Prom
       ghl_api_key,
       logo_url: logo.url,
       notes: field(fd, 'notes'),
-    });
+    };
+    let { error } = await supabaseAdmin.from('clients').insert({ ...row, segment: segmentField(fd) });
+    if (error && MISSING_SEGMENT.test(error.message)) ({ error } = await supabaseAdmin.from('clients').insert(row));
 
     if (error) return { ok: false, error: error.message };
     await upsertGhlEnrollment({ location_id: ghl_location_id, location_name: client_name, api_key: ghl_api_key, is_active: true });
@@ -137,6 +148,7 @@ export async function updateClientAction(_prev: ActionState, fd: FormData): Prom
       meta_ad_account_id: field(fd, 'meta_ad_account_id'),
       ghl_location_id,
       notes: field(fd, 'notes'),
+      segment: segmentField(fd),
     };
 
     // Only overwrite the GHL key when a new value is entered — leaving the field blank
@@ -149,7 +161,12 @@ export async function updateClientAction(_prev: ActionState, fd: FormData): Prom
     if (logo.error) return { ok: false, error: logo.error };
     if (logo.url) patch.logo_url = logo.url;
 
-    const { error } = await supabaseAdmin.from('clients').update(patch).eq('id', id);
+    let { error } = await supabaseAdmin.from('clients').update(patch).eq('id', id);
+    if (error && MISSING_SEGMENT.test(error.message)) {
+      const { segment: _segment, ...withoutSegment } = patch;
+      void _segment;
+      ({ error } = await supabaseAdmin.from('clients').update(withoutSegment).eq('id', id));
+    }
     if (error) return { ok: false, error: error.message };
     await upsertGhlEnrollment({ location_id: ghl_location_id, location_name: client_name, api_key: newKey });
     revalidatePath('/');

@@ -75,13 +75,31 @@ export function FunnelAnalyticsView({
       })
     : metricsList;
 
-  // Totals across the funnels shown (respects the Active/Inactive tab + search).
-  const sums = filtered.reduce(
+  // Totals across the funnels shown (respects the Active/Inactive tab + search), minus two
+  // kinds of funnel that would skew a B2C benchmark:
+  //   • funnels with a split test still running — their numbers are a blend of versions
+  //     being compared, not a settled funnel;
+  //   • B2B clients (UNCAHP's own funnels) — a different audience entirely.
+  // Both stay listed as cards; they're just not in the totals.
+  const isTesting = (m: FunnelMetrics) => {
+    const t = splitByFunnel.get(m.funnel_id);
+    return !!t && t.mode === 'test' && t.status === 'running';
+  };
+  const isB2B = (m: FunnelMetrics) => clientInfo.get(m.client_id)?.segment === 'b2b';
+  const counted = filtered.filter(m => !isTesting(m) && !isB2B(m));
+  const excludedTesting = filtered.filter(isTesting).length;
+  const excludedB2B = filtered.filter(isB2B).length;
+  const excludedNote = [
+    excludedTesting ? `${excludedTesting} running split test${excludedTesting === 1 ? '' : 's'}` : '',
+    excludedB2B ? `${excludedB2B} B2B` : '',
+  ].filter(Boolean).join(' · ');
+
+  const sums = counted.reduce(
     (a, m) => ({ lp: a.lp + (m.lp_views ?? 0), optins: a.optins + m.optins, deposits: a.deposits + m.deposits }),
     { lp: 0, optins: 0, deposits: 0 },
   );
   // Average opt-in rate = mean of each funnel's opt-in rate (funnels with LP views).
-  const rated = filtered.filter(m => m.optin_rate_pct != null);
+  const rated = counted.filter(m => m.optin_rate_pct != null);
   const avgOptinRate = rated.length
     ? +(rated.reduce((s, m) => s + (m.optin_rate_pct ?? 0), 0) / rated.length).toFixed(1)
     : null;
@@ -186,11 +204,14 @@ export function FunnelAnalyticsView({
                 className="w-full rounded-lg border border-border bg-surface py-2 pl-9 pr-3 text-sm text-fg placeholder:text-fg-dim focus:border-border-strong focus:outline-none"
               />
             </div>
-            <div className="ml-auto flex items-center gap-5 rounded-lg border border-border bg-surface px-4 py-1.5">
-              <TotalSum label="LP Views" value={formatNumber(sums.lp)} />
-              <TotalSum label="Opt-ins" value={formatNumber(sums.optins)} />
-              <TotalSum label="Avg Opt-in Rate" value={formatPercent(avgOptinRate)} />
-              <TotalSum label={`${funnelStatus === 'active' ? 'Active' : 'Inactive'} deposits`} value={formatNumber(sums.deposits)} accent />
+            <div className="ml-auto flex flex-col items-end gap-1">
+              <div className="flex items-center gap-5 rounded-lg border border-border bg-surface px-4 py-1.5">
+                <TotalSum label="LP Views" value={formatNumber(sums.lp)} />
+                <TotalSum label="Opt-ins" value={formatNumber(sums.optins)} />
+                <TotalSum label="Avg Opt-in Rate" value={formatPercent(avgOptinRate)} />
+                <TotalSum label={`${funnelStatus === 'active' ? 'Active' : 'Inactive'} deposits`} value={formatNumber(sums.deposits)} accent />
+              </div>
+              {excludedNote && <div className="text-[10px] text-fg-dim">Not in totals: {excludedNote}</div>}
             </div>
           </div>
           <Overview metricsList={filtered} clientInfo={clientInfo} status={funnelStatus} splitByFunnel={splitByFunnel} onOpen={fid => navigate({ funnel: fid })} />

@@ -387,6 +387,13 @@ function ClientFormModal({
             />
           </Field>
 
+          <Field label="Segment" hint="B2B clients (UNCAHP's own funnels) are still listed in Funnel Analytics, but left out of the portfolio totals.">
+            <select name="segment" defaultValue={initial?.segment ?? 'b2c'} className={inputCls}>
+              <option value="b2c">B2C — clinic selling to patients</option>
+              <option value="b2b">B2B — UNCAHP selling to clinics</option>
+            </select>
+          </Field>
+
           <Field label="Notes">
             <textarea
               name="notes"
