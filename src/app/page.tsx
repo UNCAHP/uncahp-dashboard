@@ -30,6 +30,7 @@ import {
 import { getAdminClients } from '@/lib/clientAdmin';
 import { getAdminFunnels } from '@/lib/funnelAdmin';
 import { getCallSummary, getCallActivity } from '@/lib/csrMetrics';
+import { setterClients } from '@/lib/csrConstants';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 
@@ -165,7 +166,8 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     if (detailClient) {
       callsDetail = { client: detailClient, activity: await getCallActivity(detailClient.client_id, range) };
     } else {
-      callsOverview = await Promise.all(clients.map(async c => ({ client: c, summary: await getCallSummary(c.client_id, range) })));
+      // Self-booking clients (no assigned setter) and B2B are out of the Speed-to-Lead KPI.
+      callsOverview = await Promise.all(setterClients(clients).map(async c => ({ client: c, summary: await getCallSummary(c.client_id, range) })));
     }
   }
 

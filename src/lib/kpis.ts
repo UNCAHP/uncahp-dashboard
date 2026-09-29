@@ -1,6 +1,7 @@
 import { supabaseAdmin } from './supabase';
 import { getActiveClients, type DateRange } from './queries';
 import { getSpeedToLead } from './csrMetrics';
+import { setterClients } from './csrConstants';
 import { BOOKINGS_KPIS_ENABLED } from './csrConstants';
 
 // Consolidated, per-person team KPIs (the KPIs page). Aggregated ACROSS all clients —
@@ -87,7 +88,8 @@ export async function getCsrScorecard(month: string | null): Promise<CsrKpiRow[]
   }
 
   // 2) Speed to Lead per CSR, merged across every client for the same month.
-  const clients = await getActiveClients();
+  // Only clients with a dedicated setter — self-booking clients and B2B aren't measured.
+  const clients = setterClients(await getActiveClients());
   const speeds = await Promise.all(clients.map(c => getSpeedToLead(c.client_id, range)));
   for (const s of speeds) {
     for (const p of s.perCsr) {

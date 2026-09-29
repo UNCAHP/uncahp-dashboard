@@ -16,3 +16,13 @@ export const CSR_SETTERS: { key: string; label: string }[] = [
   { key: 'alexis', label: 'Alexis' },
   { key: 'maddie', label: 'Maddie' },
 ];
+
+// Which clients Speed to Lead is measured for: B2C clients with a dedicated setter.
+// Self-booking clients (no csr_key) book themselves, so a phone-response KPI doesn't
+// apply. Before migration 0019 has run nobody has a csr_key yet — in that case keep
+// every B2C client rather than silently measuring none.
+export function setterClients<T extends { segment?: 'b2c' | 'b2b'; csr_key?: string | null }>(clients: T[]): T[] {
+  const b2c = clients.filter(c => c.segment !== 'b2b');
+  const assigned = b2c.filter(c => !!c.csr_key);
+  return assigned.length ? assigned : b2c;
+}
