@@ -13,7 +13,7 @@ export type VariantStat = {
   optins: number;
   deposits: number;
   optinRate: number | null;   // optins / views
-  depositRate: number | null; // deposits / views
+  depositRate: number | null; // deposits / optins — how well the offer converts the people who opted in
   isLeader: boolean;
 };
 
@@ -134,7 +134,7 @@ export async function getSplitTests(): Promise<SplitTest[]> {
       optins: c.optin,
       deposits: c.deposit,
       optinRate: c.view ? c.optin / c.view : null,
-      depositRate: c.view ? c.deposit / c.view : null,
+      depositRate: c.optin ? c.deposit / c.optin : null,
       isLeader: false,
     });
 
@@ -151,10 +151,13 @@ export async function getSplitTests(): Promise<SplitTest[]> {
 
     const rateOf = (v: VariantStat) => (primaryMetric === 'deposit' ? v.depositRate : v.optinRate) ?? -1;
     const convOf = (v: VariantStat) => (primaryMetric === 'deposit' ? v.deposits : v.optins);
+    // The denominator the primary rate is measured over: opt-ins for the deposit rate,
+    // views for the opt-in rate. The z-test and the ranking filter must use the same one.
+    const trialsOf = (v: VariantStat) => (primaryMetric === 'deposit' ? v.optins : v.views);
     const totalViews = variants.reduce((s, v) => s + v.views, 0);
 
     // Rank by primary rate to find leader + closest rival.
-    const ranked = [...variants].filter(v => v.views > 0).sort((a, b) => rateOf(b) - rateOf(a));
+    const ranked = [...variants].filter(v => trialsOf(v) > 0).sort((a, b) => rateOf(b) - rateOf(a));
     const leader = ranked[0] ?? null;
     const runnerUp = ranked[1] ?? null;
     if (leader) variants.find(v => v.key === leader.key)!.isLeader = true;
@@ -163,7 +166,7 @@ export async function getSplitTests(): Promise<SplitTest[]> {
     let upliftPct: number | null = null;
     let callable = false;
     if (leader && runnerUp) {
-      confidencePct = confidence(convOf(leader), leader.views, convOf(runnerUp), runnerUp.views);
+      confidencePct = confidence(convOf(leader), trialsOf(leader), convOf(runnerUp), trialsOf(runnerUp));
       const lr = rateOf(leader), rr = rateOf(runnerUp);
       upliftPct = rr > 0 ? ((lr - rr) / rr) * 100 : null;
       callable = confidencePct !== null && confidencePct >= SPLIT_CONFIDENCE_TO_CALL &&

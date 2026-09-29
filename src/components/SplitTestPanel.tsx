@@ -109,7 +109,7 @@ function variantStages(v: VariantStat): Stage[] {
   return [
     { key: 'views', label: 'Views', icon: STAGE_ICONS.views, value: v.views, caption: 'first-party · landing page' },
     { key: 'optins', label: 'Opt-ins', icon: STAGE_ICONS.optins, value: v.optins, caption: v.optinRate != null ? `${formatPercent(v.optinRate * 100, 1)} of views` : 'No views yet' },
-    { key: 'deposits', label: 'Deposits', icon: STAGE_ICONS.deposits, value: v.deposits, caption: v.depositRate != null ? `${formatPercent(v.depositRate * 100, 1)} of views` : 'No views yet' },
+    { key: 'deposits', label: 'Deposits', icon: STAGE_ICONS.deposits, value: v.deposits, caption: v.depositRate != null ? `${formatPercent(v.depositRate * 100, 1)} of opt-ins` : 'No opt-ins yet' },
   ];
 }
 
@@ -130,8 +130,8 @@ export function TrackingPanel({ test, baseUrl, metaLpViews }: { test: SplitTest;
 
       <div className="grid grid-cols-3 gap-3">
         <Stat label="LP views" value={formatNumber(views)} />
-        <Stat label="Opt-ins" value={formatNumber(optins)} sub={views ? formatPercent((optins / views) * 100, 1) : undefined} />
-        <Stat label="Deposits" value={formatNumber(deposits)} sub={views ? formatPercent((deposits / views) * 100, 1) : undefined} accent />
+        <Stat label="Opt-ins" value={formatNumber(optins)} sub={views ? `${formatPercent((optins / views) * 100, 1)} of views` : undefined} />
+        <Stat label="Deposits" value={formatNumber(deposits)} sub={optins ? `${formatPercent((deposits / optins) * 100, 1)} of opt-ins` : undefined} accent />
       </div>
 
       <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-bg px-3.5 py-2.5 text-xs text-fg-muted">
@@ -153,7 +153,7 @@ function Stat({ label, value, sub, accent }: { label: string; value: string; sub
     <div className="rounded-lg border border-border bg-bg px-3.5 py-3">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">{label}</div>
       <div className={cn('mt-0.5 font-mono text-xl font-bold tabular-nums', accent ? 'text-pink' : 'text-fg')}>{value}</div>
-      {sub && <div className="text-[10px] text-fg-dim">{sub} of views</div>}
+      {sub && <div className="text-[10px] text-fg-dim">{sub}</div>}
     </div>
   );
 }
