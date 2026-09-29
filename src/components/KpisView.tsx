@@ -71,7 +71,7 @@ export function KpisView({ rows, months, month, daily, syncAgeHours, speed }: {
                 <th className="px-3 py-2.5 text-left font-semibold">Setter</th>
                 <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Confirmed bookings <InfoTip text={BOOKINGS_KPIS_ENABLED ? "The setter's booking total for the month, from their tab in the Appointment Setting Tracker sheet (synced daily). Targets: Junior 60 · Flat 90 · Senior 110." : 'Paused — not currently being tracked. Targets when live: Junior 60 · Flat 90 · Senior 110.'} /></span></th>
                 <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Phone booking ratio <InfoTip text={BOOKINGS_KPIS_ENABLED ? 'CALL ÷ (CALL + SMS) bookings from the same sheet tab. Targets: Junior 60% · Flat 65% · Senior 75%.' : 'Paused — not currently being tracked. Targets when live: Junior 60% · Flat 65% · Senior 75%.'} /></span></th>
-                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text={`Of every new lead on this setter's assigned clients that arrived during their shift, the % reached by phone within ${SPEED_TO_LEAD_MINUTES} min. A lead nobody phoned counts as a miss. Cover from another setter counts when they're off. Targets: Junior 75% · Flat 80% · Senior 85%.`} /></span></th>
+                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text={`Of every new lead on this setter's assigned clients that arrived during their shift, the % with an outbound dial within ${SPEED_TO_LEAD_MINUTES} min (answered or not). A lead nobody phoned counts as a miss. Cover from another setter counts when they're off. Targets: Junior 75% · Flat 80% · Senior 85%.`} /></span></th>
               </tr>
             </thead>
             <tbody>
@@ -246,7 +246,8 @@ function SpeedBySetter({ rows, month }: { rows: CsrSpeedRow[]; month: string | n
           <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
             <th className="px-3 py-2.5 text-left font-semibold">Setter</th>
             <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Leads on shift <InfoTip text="New leads — contacts with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number — on this setter's assigned clients that arrived while they were on shift, per the Start of Day check-in." /></span></th>
-            <th className="px-3 py-2.5 text-right font-semibold">Reached ≤{SPEED_TO_LEAD_MINUTES}m</th>
+            <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Attempted ≤{SPEED_TO_LEAD_MINUTES}m <InfoTip text="Leads with an outbound dial within 30 min of enquiry, whether or not it was answered. This is the scored number — a setter can't make a lead pick up." /></span></th>
+            <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Connected ≤{SPEED_TO_LEAD_MINUTES}m <InfoTip text="Leads actually reached: a completed outbound call of at least 60 seconds within 30 min. Shown for context, not scored." /></span></th>
             <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Never phoned <InfoTip text="Leads that got no outbound call at all. They count as misses." /></span></th>
             <th className="px-3 py-2.5 text-right font-semibold">Speed to Lead</th>
             <th className="px-3 py-2.5 text-right font-semibold">Tier</th>
@@ -267,6 +268,7 @@ function SpeedBySetter({ rows, month }: { rows: CsrSpeedRow[]; month: string | n
                   </td>
                   <td className="px-3 py-3 text-right font-mono tabular-nums text-fg">{r.leads}</td>
                   <td className="px-3 py-3 text-right font-mono tabular-nums text-green">{r.within}</td>
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-fg-muted">{r.connected}</td>
                   <td className="px-3 py-3 text-right font-mono tabular-nums text-red">{r.neverCalled}</td>
                   <td className={cn('px-3 py-3 text-right font-mono font-semibold tabular-nums', pctText(r.pct))}>{r.pct == null ? '—' : `${r.pct}%`}</td>
                   <td className="px-3 py-3 text-right">
@@ -278,6 +280,7 @@ function SpeedBySetter({ rows, month }: { rows: CsrSpeedRow[]; month: string | n
                     <td className="py-2 pl-10 pr-3 text-fg-muted">{c.client_name}</td>
                     <td className="px-3 py-2 text-right font-mono tabular-nums text-fg-muted">{c.leads}</td>
                     <td className="px-3 py-2 text-right font-mono tabular-nums text-green/80">{c.within}</td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-fg-dim">{c.connected}</td>
                     <td className="px-3 py-2 text-right font-mono tabular-nums text-red/80">{c.neverCalled}</td>
                     <td className={cn('px-3 py-2 text-right font-mono tabular-nums', pctText(c.pct))}>{c.pct == null ? '—' : `${c.pct}%`}</td>
                     <td />

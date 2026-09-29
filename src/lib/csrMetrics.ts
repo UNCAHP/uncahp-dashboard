@@ -84,7 +84,8 @@ export type CsrSpeedRow = {
 export type SpeedToLead = {
   leadsInHours: number;      // all new leads that arrived during a setter shift (the rate's denominator)
   phoned: number;            // ...of those, how many got a phone call (context)
-  contactedWithin: number;   // ...within the 30-min target (numerator)
+  contactedWithin: number;   // ...an outbound ATTEMPT within the 30-min target (numerator — the scored KPI)
+  connectedWithin: number;   // ...an outbound call that CONNECTED (completed, ≥60s) within 30 min — the outcome
   pct: number | null;        // contactedWithin ÷ leadsInHours — measured on ALL new leads
   neverCalled: number;       // leads with no phone call — a miss at the team level
   medianMinutes: number | null;
@@ -106,7 +107,7 @@ const CONVERSATION_MIN_SEC = 60;
 
 export async function getSpeedToLead(clientId: string, range: DateRange): Promise<SpeedToLead> {
   const empty: SpeedToLead = {
-    leadsInHours: 0, phoned: 0, contactedWithin: 0, pct: null, neverCalled: 0,
+    leadsInHours: 0, phoned: 0, contactedWithin: 0, connectedWithin: 0, pct: null, neverCalled: 0,
     medianMinutes: null, perCsr: [], callsOnFile: 0,
   };
   if (!clientId) return empty;
@@ -120,7 +121,7 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
       .lte('date_added', `${range.until}T23:59:59Z`),
     supabaseAdmin
       .from('csr_calls')
-      .select('contact_source_id, user_name, user_id, call_at, direction')
+      .select('contact_source_id, user_name, user_id, call_at, direction, status, duration_sec')
       .eq('location_id', clientId)
       .eq('direction', 'outbound'),
     getShiftCoverage(clientId, range),
@@ -128,17 +129,23 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
 
   const callsOnFile = calls?.length ?? 0;
 
-  // Earliest outbound call per contact.
+  // Earliest outbound ATTEMPT per contact (any status — the setter dialled), and the
+  // earliest CONNECTED call (completed and ≥60s, the same bar as a "conversation").
   const firstCall = new Map<string, { at: string; csr: string }>();
+  const firstConnected = new Map<string, string>();
   for (const c of calls ?? []) {
     if (!c.contact_source_id || !c.call_at) continue;
     const prev = firstCall.get(c.contact_source_id);
     if (!prev || c.call_at < prev.at) {
       firstCall.set(c.contact_source_id, { at: c.call_at, csr: c.user_name || c.user_id || '(unknown)' });
     }
+    if (c.status === 'completed' && (c.duration_sec ?? 0) >= CONVERSATION_MIN_SEC) {
+      const pc = firstConnected.get(c.contact_source_id);
+      if (!pc || c.call_at < pc) firstConnected.set(c.contact_source_id, c.call_at);
+    }
   }
 
-  let leadsInHours = 0, contactedWithin = 0, neverCalled = 0;
+  let leadsInHours = 0, contactedWithin = 0, connectedWithin = 0, neverCalled = 0;
   const deltas: number[] = [];
   const perCsr = new Map<string, CsrSpeedRow>();
 
@@ -162,6 +169,9 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
     row.called++;
     if (mins <= SPEED_TO_LEAD_MINUTES) { row.within++; contactedWithin++; }
     perCsr.set(fc.csr, row);
+
+    const conn = firstConnected.get(l.source_id);
+    if (conn && conn > l.date_added && (Date.parse(conn) - Date.parse(l.date_added)) / 60000 <= SPEED_TO_LEAD_MINUTES) connectedWithin++;
   }
 
   for (const r of perCsr.values()) r.pct = r.called ? +((100 * r.within) / r.called).toFixed(1) : null;
@@ -175,6 +185,7 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
     leadsInHours,
     phoned,
     contactedWithin,
+    connectedWithin,
     pct: leadsInHours ? +((100 * contactedWithin) / leadsInHours).toFixed(1) : null,
     neverCalled,
     medianMinutes: median == null ? null : Math.round(median),

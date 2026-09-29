@@ -250,13 +250,14 @@ function Detail({ row }: { row: CallDetail }) {
             <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-gradient-to-br from-surface-2/40 to-surface p-6">
               <div className="flex items-center gap-1.5 self-start text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
                 <Zap size={13} className="text-pink" /> Speed to Lead
-                <InfoTip text={`Of ALL new leads that came in while a setter was on shift (from the Start of Day check-in), the % reached by phone within ${SPEED_TO_LEAD_MINUTES} minutes. A lead never phoned counts as a miss. Calls made off GHL aren't seen.`} />
+                <InfoTip text={`Of ALL new leads that came in while a setter was on shift (from the Start of Day check-in), the % with an outbound dial within ${SPEED_TO_LEAD_MINUTES} minutes, answered or not. 'Connected' = a completed call of 60s+ in that window. A lead never phoned counts as a miss. Calls made off GHL aren't seen.`} />
               </div>
               <Gauge value={a.speed.pct} />
               <span className={cn('rounded-md px-2.5 py-1 text-xs font-semibold', speedTier(a.speed.pct).cls)}>{speedTier(a.speed.pct).label}</span>
               <div className="text-center text-[11px] text-fg-dim">
-                {a.speed.contactedWithin}/{a.speed.leadsInHours} leads reached ≤{SPEED_TO_LEAD_MINUTES}m
+                {a.speed.contactedWithin}/{a.speed.leadsInHours} leads dialled ≤{SPEED_TO_LEAD_MINUTES}m
                 {a.speed.medianMinutes != null && <> · median {a.speed.medianMinutes}m</>}
+                {' · '}<span className="text-fg-muted">{a.speed.connectedWithin} connected</span>
               </div>
               <div className="text-center text-[10px] text-fg-dim">
                 {a.speed.leadsInHours} new leads on shift · <span className="text-fg-muted">{a.speed.neverCalled} never phoned</span> (counts as a miss)

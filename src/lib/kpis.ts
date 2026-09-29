@@ -40,7 +40,8 @@ export type CsrSpeedClientRow = {
   client_id: string;
   client_name: string;
   leads: number;
-  within: number;
+  within: number;      // attempted ≤30m (scored)
+  connected: number;   // connected ≤30m (outcome)
   neverCalled: number;
   pct: number | null;
 };
@@ -50,6 +51,7 @@ export type CsrSpeedRow = {
   key: string;               // lowercased first name
   leads: number;
   within: number;
+  connected: number;
   neverCalled: number;
   pct: number | null;
   clients: CsrSpeedClientRow[];
@@ -65,13 +67,14 @@ export async function getCsrSpeedToLead(month: string | null): Promise<CsrSpeedR
   clients.forEach((c, i) => {
     const key = c.csr_key as string;
     const s = speeds[i];
-    const row = by.get(key) ?? { csr: key.charAt(0).toUpperCase() + key.slice(1), key, leads: 0, within: 0, neverCalled: 0, pct: null, clients: [] };
+    const row = by.get(key) ?? { csr: key.charAt(0).toUpperCase() + key.slice(1), key, leads: 0, within: 0, connected: 0, neverCalled: 0, pct: null, clients: [] };
     row.leads += s.leadsInHours;
     row.within += s.contactedWithin;
+    row.connected += s.connectedWithin;
     row.neverCalled += s.neverCalled;
     row.clients.push({
       client_id: c.client_id, client_name: c.client_name,
-      leads: s.leadsInHours, within: s.contactedWithin, neverCalled: s.neverCalled,
+      leads: s.leadsInHours, within: s.contactedWithin, connected: s.connectedWithin, neverCalled: s.neverCalled,
       pct: s.leadsInHours ? +((100 * s.contactedWithin) / s.leadsInHours).toFixed(1) : null,
     });
     by.set(key, row);
