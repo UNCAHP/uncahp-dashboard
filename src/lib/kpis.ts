@@ -1,8 +1,7 @@
 import { supabaseAdmin } from './supabase';
 import { getActiveClients, type DateRange } from './queries';
 import { getSpeedToLead } from './csrMetrics';
-import { setterClients } from './csrConstants';
-import { BOOKINGS_KPIS_ENABLED } from './csrConstants';
+import { setterClients, BOOKINGS_KPIS_ENABLED } from './csrConstants';
 
 // Consolidated, per-person team KPIs (the KPIs page). Aggregated ACROSS all clients —
 // a setter's targets span every clinic they work, so nothing here is client-scoped.
@@ -10,7 +9,8 @@ import { BOOKINGS_KPIS_ENABLED } from './csrConstants';
 // Three CSR / appointment-setter KPIs, each with Junior/Flat/Senior tiers:
 //   • Confirmed bookings  — the setter's monthly booking total (sheet)
 //   • Phone booking ratio — CALL ÷ (CALL + SMS) bookings (sheet)
-//   • Speed to Lead       — % of phoned new leads reached ≤30 min (call log)
+//   • Speed to Lead       — of every new lead on the setter's OWN clients that arrived
+//                           during their shift, % reached by phone ≤30 min (call log)
 //
 // The first two come from the Appointment Setting Tracker Google Sheet, synced daily into
 // csr_sheet_bookings; the third is computed from csr_calls. CSRs are keyed by FIRST NAME so
@@ -25,10 +25,63 @@ export type CsrKpiRow = {
   phone: number;
   sms: number;
   phonePct: number | null;   // phone booking ratio
-  speedLeads: number;        // leads this CSR was first to phone
-  speedWithin: number;       // ...reached within 30 min
+  speedLeads: number;        // new leads on this CSR's clients that arrived during their shift
+  speedWithin: number;       // ...reached by phone within 30 min (by anyone — cover counts)
   speedPct: number | null;   // speed to lead
 };
+
+// ─── Speed to Lead, by setter ────────────────────────────────────────────────
+// A setter is accountable for every new lead on the clients assigned to them
+// (clients.csr_key) that arrived while they were on shift — including leads nobody
+// phoned. When they're off, cover from whoever else was on shift counts (see
+// csrMetrics.getShiftCoverage). Per-client rows show which accounts drag the rate.
+
+export type CsrSpeedClientRow = {
+  client_id: string;
+  client_name: string;
+  leads: number;
+  within: number;
+  neverCalled: number;
+  pct: number | null;
+};
+
+export type CsrSpeedRow = {
+  csr: string;               // display name (first name)
+  key: string;               // lowercased first name
+  leads: number;
+  within: number;
+  neverCalled: number;
+  pct: number | null;
+  clients: CsrSpeedClientRow[];
+};
+
+export async function getCsrSpeedToLead(month: string | null): Promise<CsrSpeedRow[]> {
+  if (!month) return [];
+  const range = monthRange(month);
+  const clients = setterClients(await getActiveClients()).filter(c => !!c.csr_key);
+  const speeds = await Promise.all(clients.map(c => getSpeedToLead(c.client_id, range)));
+
+  const by = new Map<string, CsrSpeedRow>();
+  clients.forEach((c, i) => {
+    const key = c.csr_key as string;
+    const s = speeds[i];
+    const row = by.get(key) ?? { csr: key.charAt(0).toUpperCase() + key.slice(1), key, leads: 0, within: 0, neverCalled: 0, pct: null, clients: [] };
+    row.leads += s.leadsInHours;
+    row.within += s.contactedWithin;
+    row.neverCalled += s.neverCalled;
+    row.clients.push({
+      client_id: c.client_id, client_name: c.client_name,
+      leads: s.leadsInHours, within: s.contactedWithin, neverCalled: s.neverCalled,
+      pct: s.leadsInHours ? +((100 * s.contactedWithin) / s.leadsInHours).toFixed(1) : null,
+    });
+    by.set(key, row);
+  });
+  for (const r of by.values()) {
+    r.pct = r.leads ? +((100 * r.within) / r.leads).toFixed(1) : null;
+    r.clients.sort((a, b) => b.leads - a.leads);
+  }
+  return [...by.values()].sort((a, b) => b.leads - a.leads);
+}
 
 const firstKey = (s: string | null | undefined): string =>
   String(s ?? '').trim().split(/\s+/)[0]?.toLowerCase() ?? '';
@@ -53,7 +106,6 @@ export function monthRange(month: string): DateRange {
 
 export async function getCsrScorecard(month: string | null): Promise<CsrKpiRow[]> {
   if (!month) return [];
-  const range = monthRange(month);
   const by = new Map<string, CsrKpiRow>();
   const ensure = (name: string): CsrKpiRow | null => {
     if (isBot(name) || isRawUserId(name)) return null;
@@ -87,17 +139,13 @@ export async function getCsrScorecard(month: string | null): Promise<CsrKpiRow[]
     }
   }
 
-  // 2) Speed to Lead per CSR, merged across every client for the same month.
-  // Only clients with a dedicated setter — self-booking clients and B2B aren't measured.
-  const clients = setterClients(await getActiveClients());
-  const speeds = await Promise.all(clients.map(c => getSpeedToLead(c.client_id, range)));
-  for (const s of speeds) {
-    for (const p of s.perCsr) {
-      const r = ensure(p.csr);
-      if (!r) continue;
-      r.speedLeads += p.called; // leads this setter phoned
-      r.speedWithin += p.within;
-    }
+  // 2) Speed to Lead per CSR — every new lead on their assigned clients that arrived on
+  //    their shift, and how many were reached ≤30 min (same numbers as the by-setter card).
+  for (const sp of await getCsrSpeedToLead(month)) {
+    const r = ensure(sp.csr);
+    if (!r) continue;
+    r.speedLeads += sp.leads;
+    r.speedWithin += sp.within;
   }
 
   for (const r of by.values()) {

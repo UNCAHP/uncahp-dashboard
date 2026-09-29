@@ -2,11 +2,11 @@
 
 import { useRouter } from 'next/navigation';
 import { Fragment, useState } from 'react';
-import { Headphones, Megaphone, FlaskConical, Target, ChevronRight, Phone, MessageSquare } from 'lucide-react';
-import type { CsrKpiRow, CsrDayRow } from '@/lib/kpis';
+import { Headphones, Megaphone, FlaskConical, Target, ChevronRight, Phone, MessageSquare, Zap } from 'lucide-react';
+import type { CsrKpiRow, CsrDayRow, CsrSpeedRow } from '@/lib/kpis';
 import { InfoTip } from '@/components/InfoTip';
 import { SyncBadge } from '@/components/FreshnessBadge';
-import { BOOKINGS_KPIS_ENABLED } from '@/lib/csrConstants';
+import { BOOKINGS_KPIS_ENABLED, SPEED_TO_LEAD_MINUTES } from '@/lib/csrConstants';
 import { cn } from '@/lib/utils';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -24,12 +24,13 @@ const confirmedTier = (n: number): Tier => (n >= 110 ? { label: 'Senior', cls: t
 const phoneTier = (p: number): Tier => (p >= 75 ? { label: 'Senior', cls: topCls } : p >= 65 ? { label: 'Flat', cls: topCls } : p >= 60 ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
 const speedTier = (p: number): Tier => (p >= 85 ? { label: 'Senior', cls: topCls } : p >= 80 ? { label: 'Flat', cls: topCls } : p >= 75 ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
 
-export function KpisView({ rows, months, month, daily, syncAgeHours }: {
+export function KpisView({ rows, months, month, daily, syncAgeHours, speed }: {
   rows: CsrKpiRow[];
   months: string[];
   month: string | null;
   daily: Record<string, CsrDayRow[]>;
   syncAgeHours: number | null;
+  speed: CsrSpeedRow[];
 }) {
   const router = useRouter();
   const goMonth = (m: string) => router.push(`/?view=kpis&month=${encodeURIComponent(m)}`);
@@ -70,7 +71,7 @@ export function KpisView({ rows, months, month, daily, syncAgeHours }: {
                 <th className="px-3 py-2.5 text-left font-semibold">Setter</th>
                 <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Confirmed bookings <InfoTip text={BOOKINGS_KPIS_ENABLED ? "The setter's booking total for the month, from their tab in the Appointment Setting Tracker sheet (synced daily). Targets: Junior 60 · Flat 90 · Senior 110." : 'Paused — not currently being tracked. Targets when live: Junior 60 · Flat 90 · Senior 110.'} /></span></th>
                 <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Phone booking ratio <InfoTip text={BOOKINGS_KPIS_ENABLED ? 'CALL ÷ (CALL + SMS) bookings from the same sheet tab. Targets: Junior 60% · Flat 65% · Senior 75%.' : 'Paused — not currently being tracked. Targets when live: Junior 60% · Flat 65% · Senior 75%.'} /></span></th>
-                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text="Per setter: reached by phone within 30 min ÷ the leads they phoned (leads that arrived during setter shifts). Never-phoned leads count against the team total on Call Tracking, not per person. Targets: Junior 75% · Flat 80% · Senior 85%." /></span></th>
+                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text={`Of every new lead on this setter's assigned clients that arrived during their shift, the % reached by phone within ${SPEED_TO_LEAD_MINUTES} min. A lead nobody phoned counts as a miss. Cover from another setter counts when they're off. Targets: Junior 75% · Flat 80% · Senior 85%.`} /></span></th>
               </tr>
             </thead>
             <tbody>
@@ -115,7 +116,7 @@ export function KpisView({ rows, months, month, daily, syncAgeHours }: {
                   />
                   <KpiCell
                     value={r.speedPct == null ? '—' : `${r.speedPct}%`}
-                    sub={r.speedLeads > 0 ? `${r.speedWithin}/${r.speedLeads} phoned` : 'no phoned leads'}
+                    sub={r.speedLeads > 0 ? `${r.speedWithin}/${r.speedLeads} leads on shift` : 'no leads on shift'}
                     tier={r.speedPct == null ? null : speedTier(r.speedPct)}
                   />
                 </tr>
@@ -135,6 +136,11 @@ export function KpisView({ rows, months, month, daily, syncAgeHours }: {
             </tbody>
           </table>
         </div>
+      </RoleCard>
+
+      {/* Speed to Lead — by setter, with the per-client breakdown */}
+      <RoleCard icon={Zap} title="Speed to Lead" subtitle={`By setter · new leads on their clients during their shift, reached by phone within ${SPEED_TO_LEAD_MINUTES} min`}>
+        <SpeedBySetter rows={speed} month={month} />
       </RoleCard>
 
       {/* Media Buyers — awaiting KPI definitions */}
@@ -222,6 +228,66 @@ function DailyBreakdown({ csr, days }: { csr: string; days: CsrDayRow[] }) {
           {quiet} {quiet === 1 ? 'day' : 'days'} with no bookings hidden
         </div>
       )}
+    </div>
+  );
+}
+
+function SpeedBySetter({ rows, month }: { rows: CsrSpeedRow[]; month: string | null }) {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const toggle = (k: string) => setOpen(o => ({ ...o, [k]: !o[k] }));
+  if (rows.length === 0) {
+    return <div className="px-3 py-10 text-center text-sm text-fg-dim">No leads on shift in {fmtMonth(month)}.</div>;
+  }
+  const pctText = (p: number | null) => (p == null ? 'text-fg-dim' : p >= 80 ? 'text-green' : p >= 75 ? 'text-yellow' : 'text-red');
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
+            <th className="px-3 py-2.5 text-left font-semibold">Setter</th>
+            <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Leads on shift <InfoTip text="New leads (with a phone number) on this setter's assigned clients that arrived while they were on shift, per the Start of Day check-in." /></span></th>
+            <th className="px-3 py-2.5 text-right font-semibold">Reached ≤{SPEED_TO_LEAD_MINUTES}m</th>
+            <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Never phoned <InfoTip text="Leads that got no outbound call at all. They count as misses." /></span></th>
+            <th className="px-3 py-2.5 text-right font-semibold">Speed to Lead</th>
+            <th className="px-3 py-2.5 text-right font-semibold">Tier</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => {
+            const isOpen = !!open[r.key];
+            return (
+              <Fragment key={r.key}>
+                <tr onClick={() => toggle(r.key)} className={cn('cursor-pointer border-b border-border/50 hover:bg-white/[0.02]', isOpen && 'bg-white/[0.02]')}>
+                  <td className="px-3 py-3 font-medium text-fg">
+                    <span className="inline-flex items-center gap-1.5">
+                      <ChevronRight size={14} className={cn('text-fg-dim transition-transform', isOpen && 'rotate-90')} aria-hidden />
+                      {r.csr}
+                      <span className="text-[11px] font-normal text-fg-dim">· {r.clients.length} client{r.clients.length === 1 ? '' : 's'}</span>
+                    </span>
+                  </td>
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-fg">{r.leads}</td>
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-green">{r.within}</td>
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-red">{r.neverCalled}</td>
+                  <td className={cn('px-3 py-3 text-right font-mono font-semibold tabular-nums', pctText(r.pct))}>{r.pct == null ? '—' : `${r.pct}%`}</td>
+                  <td className="px-3 py-3 text-right">
+                    {r.pct == null ? <span className="text-fg-dim">—</span> : <span className={cn('inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold', speedTier(r.pct).cls)}>{speedTier(r.pct).label}</span>}
+                  </td>
+                </tr>
+                {isOpen && r.clients.map(c => (
+                  <tr key={c.client_id} className="border-b border-border/40 bg-black/20 text-xs">
+                    <td className="py-2 pl-10 pr-3 text-fg-muted">{c.client_name}</td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-fg-muted">{c.leads}</td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-green/80">{c.within}</td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-red/80">{c.neverCalled}</td>
+                    <td className={cn('px-3 py-2 text-right font-mono tabular-nums', pctText(c.pct))}>{c.pct == null ? '—' : `${c.pct}%`}</td>
+                    <td />
+                  </tr>
+                ))}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
