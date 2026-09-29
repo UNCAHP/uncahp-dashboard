@@ -19,7 +19,19 @@ export type CallsSyncResult = {
 };
 
 type GhlUser = { id: string; name?: string; firstName?: string; lastName?: string };
-type Conversation = { id: string; contactId?: string; lastMessageDate?: string };
+type Conversation = { id: string; contactId?: string; lastMessageDate?: string | number };
+
+// GHL returns dates as ISO strings in some payloads and epoch milliseconds in others —
+// conversations/search switched to epoch ms. Date.parse(number) is NaN, which silently
+// disabled the sweep's stop condition: every conversation the client ever had was
+// scanned, and the biggest clients (Salon House: 6.6k conversations) timed out the cron
+// before a single call was written. Normalise both forms.
+const toMs = (v: string | number | null | undefined): number => {
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number') return v;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 1e11 ? n : Date.parse(v);
+};
 type Message = {
   id: string; messageType?: string; direction?: string; status?: string;
   dateAdded?: string; userId?: string; contactId?: string;
@@ -75,11 +87,12 @@ export async function syncClientCalls(locationId: string, days = 30): Promise<Ca
     if (cs.length === 0) break;
     for (const c of cs) {
       convScanned++;
-      const last = c.lastMessageDate ? Date.parse(c.lastMessageDate) : 0;
+      const last = toMs(c.lastMessageDate);
       if (last && last < sinceMs) break outer; // ordered desc → everything after is older
       convIds.push(c.id);
     }
-    cursor = cs[cs.length - 1]?.lastMessageDate ?? null;
+    const lastDate = cs[cs.length - 1]?.lastMessageDate;
+    cursor = lastDate == null ? null : String(lastDate);
     if (cs.length < 100 || !cursor) break;
   }
 
@@ -106,7 +119,7 @@ export async function syncClientCalls(locationId: string, days = 30): Promise<Ca
       for (const m of msgs) {
         if (String(m.messageType ?? '').toUpperCase() !== 'TYPE_CALL') continue;
         if (!m.id || seen.has(m.id)) continue;
-        if (m.dateAdded && Date.parse(m.dateAdded) < sinceMs) continue;
+        if (m.dateAdded && toMs(m.dateAdded) < sinceMs) continue;
         seen.add(m.id);
         rows.push({
           location_id: locationId,
