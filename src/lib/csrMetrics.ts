@@ -3,11 +3,14 @@ import type { DateRange } from './queries';
 import { SPEED_TO_LEAD_MINUTES } from './csrConstants';
 
 // ─── Speed to Lead ───────────────────────────────────────────────────────────
-// "% of ALL new leads contacted by phone within 30 min of enquiry (10am–6pm UK)".
+// "% of ALL new leads contacted by phone within 30 min of enquiry, during setter shifts".
 //
-//   Denominator — every lead created in range whose enquiry landed inside business hours
-//                 (10:00–18:00 Europe/London) AND has a phone number (a lead with no
-//                 number can't be phoned, so it's excluded rather than counted as a miss).
+//   Denominator — every lead created in range whose enquiry landed while at least one
+//                 setter was on shift that day (csr_shifts, written by Viktor after the
+//                 Start of Day check-in; London time) AND has a phone number (a lead with
+//                 no number can't be phoned, so it's excluded rather than counted as a
+//                 miss). Days with no shift rows fall back to the old fixed 10:00–18:00
+//                 window so history before the shift feed still renders.
 //   Numerator   — those with an OUTBOUND call logged within 30 minutes of the enquiry.
 //
 // A lead with no call at all stays in the TEAM denominator and counts as a MISS — the
@@ -17,8 +20,45 @@ import { SPEED_TO_LEAD_MINUTES } from './csrConstants';
 // sit in the "No phone call" bucket and drag the team rate — individual rates are of the
 // leads that setter phoned.
 
+// Fallback window for days with no shift data.
 const BUSINESS_START = 10;
 const BUSINESS_END = 18; // exclusive (6pm)
+
+// Per-day shift coverage: the union of every setter's on-shift interval, as "HH:MM"
+// London-local strings. A lead counts if its arrival time falls inside any interval.
+type Coverage = Map<string, { start: string; end: string }[]>;
+
+async function getShiftCoverage(range: DateRange): Promise<Coverage> {
+  const { data } = await supabaseAdmin
+    .from('csr_shifts')
+    .select('shift_date, shift_start, shift_end, off')
+    .gte('shift_date', range.since)
+    .lte('shift_date', range.until);
+  const cov: Coverage = new Map();
+  for (const r of data ?? []) {
+    if (r.off || !r.shift_start || !r.shift_end) continue;
+    const list = cov.get(r.shift_date) ?? [];
+    list.push({ start: String(r.shift_start).slice(0, 5), end: String(r.shift_end).slice(0, 5) });
+    cov.set(r.shift_date, list);
+  }
+  return cov;
+}
+
+// "HH:MM" in London time.
+const londonClock = (iso: string): string =>
+  new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
+
+// Was anyone on shift when this lead arrived? Shift data wins; otherwise the fixed window.
+function onShift(iso: string, cov: Coverage): boolean {
+  const day = londonDate(iso);
+  const shifts = cov.get(day);
+  if (shifts && shifts.length) {
+    const t = londonClock(iso);
+    return shifts.some(s => t >= s.start && t < s.end);
+  }
+  const h = londonHour(iso);
+  return h >= BUSINESS_START && h < BUSINESS_END;
+}
 
 export type CsrSpeedRow = {
   csr: string;
@@ -28,7 +68,7 @@ export type CsrSpeedRow = {
 };
 
 export type SpeedToLead = {
-  leadsInHours: number;      // all new leads created 10am–6pm (the rate's denominator)
+  leadsInHours: number;      // all new leads that arrived during a setter shift (the rate's denominator)
   phoned: number;            // ...of those, how many got a phone call (context)
   contactedWithin: number;   // ...within the 30-min target (numerator)
   pct: number | null;        // contactedWithin ÷ leadsInHours — measured on ALL new leads
@@ -57,7 +97,7 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
   };
   if (!clientId) return empty;
 
-  const [{ data: leads }, { data: calls }] = await Promise.all([
+  const [{ data: leads }, { data: calls }, coverage] = await Promise.all([
     supabase
       .from('ghl_contacts')
       .select('source_id, date_added, phone')
@@ -69,6 +109,7 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
       .select('contact_source_id, user_name, user_id, call_at, direction')
       .eq('location_id', clientId)
       .eq('direction', 'outbound'),
+    getShiftCoverage(range),
   ]);
 
   const callsOnFile = calls?.length ?? 0;
@@ -91,8 +132,7 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
     if (!l.date_added) continue;
     // No phone number → can't be a phone-response target, so it's not in the denominator.
     if (!String((l as { phone?: string | null }).phone ?? '').trim()) continue;
-    const h = londonHour(l.date_added);
-    if (h < BUSINESS_START || h >= BUSINESS_END) continue; // outside business hours
+    if (!onShift(l.date_added, coverage)) continue; // nobody on shift when it arrived
     leadsInHours++;
 
     const fc = firstCall.get(l.source_id);
