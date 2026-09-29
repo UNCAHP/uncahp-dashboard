@@ -277,7 +277,7 @@ function Detail({ row }: { row: CallDetail }) {
                 <div className="rounded-2xl border border-border bg-surface p-5">
                   <div className="mb-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
                     <GaugeIcon size={13} className="text-pink" /> New leads on shift
-                    <InfoTip text="New leads — contacts with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number — that arrived while a setter was on shift (per the daily check-in; days without shift data use 10am–6pm). Speed to Lead is measured on ALL of them — a lead never phoned counts as a miss. Leads with no number are excluded (they can't be called)." />
+                    <InfoTip text="New leads — contacts with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number — that arrived while this client's setter (or cover) was on shift, per the daily Start of Day check-in. Days with no shift data aren't measured. Speed to Lead is measured on ALL of them — a lead never phoned counts as a miss. Leads with no number are excluded (they can't be called)." />
                   </div>
                   <LeadSplit leads={a.speed.leadsInHours} phoned={a.speed.phoned} within={a.speed.contactedWithin} />
                 </div>
@@ -299,7 +299,7 @@ function Detail({ row }: { row: CallDetail }) {
                     <th className="px-2 py-2 text-left font-semibold">#</th>
                     <th className="px-2 py-2 text-left font-semibold">Setter</th>
                     <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Phoned <InfoTip text="New leads (arrived on shift) this setter was the FIRST to phone." /></span></th>
-                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Not phoned <InfoTip text="New leads (10am–6pm UK) that were never phoned. These can't be pinned on a person (leads route to the AI agent), so per-setter shows '—' and the team's total sits in the 'No phone call' row + Total." /></span></th>
+                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Not phoned <InfoTip text="New leads (arrived on shift) that were never phoned. These can't be pinned on a person (leads route to the AI agent), so per-setter shows '—' and the team's total sits in the 'No phone call' row + Total." /></span></th>
                     <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">≤{SPEED_TO_LEAD_MINUTES}m <InfoTip text={`Of the leads this setter phoned, how many within ${SPEED_TO_LEAD_MINUTES} minutes of the enquiry.`} /></span></th>
                     <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text="Per setter: reached ≤30m ÷ the leads they phoned. Team total (bottom row) = reached ≤30m ÷ ALL new leads that arrived on shift, so never-phoned leads count as misses there." /></span></th>
                     <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Tier <InfoTip text="Performance level from the speed-to-lead rate — Senior ≥85%, Flat ≥80%, Junior ≥75%, and below 75% is under target." /></span></th>
@@ -326,7 +326,7 @@ function Detail({ row }: { row: CallDetail }) {
                       {a.speed.neverCalled > 0 && (
                         <tr className="border-b border-border/50 text-fg-dim">
                           <td className="px-2 py-3"></td>
-                          <td className="px-2 py-3"><span className="inline-flex items-center gap-1 italic">No phone call <InfoTip text="New leads (10am–6pm UK) that were never phoned — a miss at the team level. Can't be pinned on a setter (leads route to the AI agent), so they only drag the team Total, not an individual's rate." /></span></td>
+                          <td className="px-2 py-3"><span className="inline-flex items-center gap-1 italic">No phone call <InfoTip text="New leads (arrived on shift) that were never phoned — a miss at the team level. Can't be pinned on a setter (leads route to the AI agent), so they only drag the team Total, not an individual's rate." /></span></td>
                           <td className="px-2 py-3 text-right">—</td>
                           <td className="px-2 py-3 text-right tabular-nums text-red">{a.speed.neverCalled}</td>
                           <td className="px-2 py-3 text-right">—</td>
@@ -336,7 +336,7 @@ function Detail({ row }: { row: CallDetail }) {
                       )}
                       <tr className="border-t border-border font-semibold text-fg">
                         <td className="px-2 py-3"></td>
-                        <td className="px-2 py-3">Total <span className="font-normal text-fg-dim">· all new leads 10–6</span></td>
+                        <td className="px-2 py-3">Total <span className="font-normal text-fg-dim">· all new leads on shift</span></td>
                         <td className="px-2 py-3 text-right tabular-nums">{a.speed.phoned}</td>
                         <td className="px-2 py-3 text-right tabular-nums">{a.speed.neverCalled}</td>
                         <td className="px-2 py-3 text-right tabular-nums">{a.speed.contactedWithin}</td>

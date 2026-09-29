@@ -10,9 +10,9 @@ import { SPEED_TO_LEAD_MINUTES, hasRefTag } from './csrConstants';
 //                 Start of Day check-in; London time) AND has a phone number (a lead with
 //                 no number can't be phoned, so it's excluded rather than counted as a
 //                 miss) AND carries a campaign REF tag (see csrConstants.REF_TAG_RE) —
-//                 untagged contacts and reactivation lists aren't new enquiries. Days
-//                 with no shift rows fall back to the old fixed 10:00–18:00 window so
-//                 history before the shift feed still renders.
+//                 untagged contacts and reactivation lists aren't new enquiries. A day
+//                 with no shift rows isn't measured at all — the KPI is defined by shifts,
+//                 so without them there's nothing to measure against.
 //   Numerator   — those with an OUTBOUND call logged within 30 minutes of the enquiry.
 //
 // A lead with no call at all stays in the TEAM denominator and counts as a MISS — the
@@ -21,10 +21,6 @@ import { SPEED_TO_LEAD_MINUTES, hasRefTag } from './csrConstants';
 // leads can't be pinned on a person (leads route to the AI agent, not a setter), so they
 // sit in the "No phone call" bucket and drag the team rate — individual rates are of the
 // leads that setter phoned.
-
-// Fallback window for days with no shift data.
-const BUSINESS_START = 10;
-const BUSINESS_END = 18; // exclusive (6pm)
 
 // Per-day shift coverage for ONE client, as "HH:MM" London-local intervals:
 //   • the client's assigned setter's shift (clients.csr_key), when they're on that day;
@@ -62,16 +58,13 @@ async function getShiftCoverage(clientId: string, range: DateRange): Promise<Cov
 const londonClock = (iso: string): string =>
   new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
 
-// Was anyone on shift when this lead arrived? Shift data wins; otherwise the fixed window.
+// Was the relevant setter (or cover) on shift when this lead arrived? No shift rows for
+// that day → not measured.
 function onShift(iso: string, cov: Coverage): boolean {
-  const day = londonDate(iso);
-  const shifts = cov.get(day);
-  if (shifts && shifts.length) {
-    const t = londonClock(iso);
-    return shifts.some(s => t >= s.start && t < s.end);
-  }
-  const h = londonHour(iso);
-  return h >= BUSINESS_START && h < BUSINESS_END;
+  const shifts = cov.get(londonDate(iso));
+  if (!shifts || shifts.length === 0) return false;
+  const t = londonClock(iso);
+  return shifts.some(s => t >= s.start && t < s.end);
 }
 
 export type CsrSpeedRow = {
@@ -92,9 +85,6 @@ export type SpeedToLead = {
   perCsr: CsrSpeedRow[];
   callsOnFile: number;       // rows in csr_calls for this client (0 ⇒ not synced yet)
 };
-
-const londonHour = (iso: string): number =>
-  Number(new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', hour12: false }));
 
 // YYYY-MM-DD in London time — for daily buckets.
 const londonDate = (iso: string): string => {
@@ -205,7 +195,7 @@ export type CsrActivityRow = {
   convRatePct: number | null;
   avgDurationSec: number | null;
   speedToLeadPct: number | null;
-  speedLeads: number;   // new leads this setter was the first to phone (10–6 window)
+  speedLeads: number;   // new leads this setter was the first to phone (arrived on shift)
   speedWithin: number;  // ...of those, contacted within the 30-min target
 };
 export type DailyPoint = { date: string; dials: number; conversations: number };
