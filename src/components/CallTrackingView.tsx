@@ -276,7 +276,7 @@ function Detail({ row }: { row: CallDetail }) {
                 <div className="rounded-2xl border border-border bg-surface p-5">
                   <div className="mb-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
                     <GaugeIcon size={13} className="text-pink" /> New leads on shift
-                    <InfoTip text="New leads that arrived while a setter was on shift (per the daily check-in; days without shift data use 10am–6pm) and have a phone number. Speed to Lead is measured on ALL of them — a lead never phoned counts as a miss. Leads with no number are excluded (they can't be called)." />
+                    <InfoTip text="New leads — contacts with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number — that arrived while a setter was on shift (per the daily check-in; days without shift data use 10am–6pm). Speed to Lead is measured on ALL of them — a lead never phoned counts as a miss. Leads with no number are excluded (they can't be called)." />
                   </div>
                   <LeadSplit leads={a.speed.leadsInHours} phoned={a.speed.phoned} within={a.speed.contactedWithin} />
                 </div>

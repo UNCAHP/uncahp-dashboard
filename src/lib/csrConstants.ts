@@ -3,6 +3,14 @@
 
 export const SPEED_TO_LEAD_MINUTES = 30;
 
+// A contact only counts as a NEW LEAD for Speed to Lead if it carries a campaign REF tag,
+// e.g. "dlc-ec-01-aug26" — <client>-<offer>-<nn>-<monYY>. That's what every ad / funnel
+// enquiry gets on the way in. Untagged contacts (manual adds, imports) and campaign tags
+// without the numbered slot (e.g. "reactivation-hifu-sep26") are not new enquiries.
+export const REF_TAG_RE = /^[a-z0-9&]+-[a-z0-9]+-\d{2}-[a-z]{3}\d{2}$/i;
+export const hasRefTag = (tags: unknown): boolean =>
+  Array.isArray(tags) && tags.some(t => typeof t === 'string' && REF_TAG_RE.test(t.trim()));
+
 // Confirmed bookings + Phone booking ratio on the CSR scorecard. These no longer come from
 // the (archived) in-dashboard booking log — they're synced daily from the Appointment
 // Setting Tracker sheet into csr_sheet_bookings. Set to false to park both columns as

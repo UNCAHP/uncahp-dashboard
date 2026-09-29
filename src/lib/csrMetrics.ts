@@ -1,6 +1,6 @@
 import { supabase, supabaseAdmin } from './supabase';
 import type { DateRange } from './queries';
-import { SPEED_TO_LEAD_MINUTES } from './csrConstants';
+import { SPEED_TO_LEAD_MINUTES, hasRefTag } from './csrConstants';
 
 // ─── Speed to Lead ───────────────────────────────────────────────────────────
 // "% of ALL new leads contacted by phone within 30 min of enquiry, during setter shifts".
@@ -9,8 +9,10 @@ import { SPEED_TO_LEAD_MINUTES } from './csrConstants';
 //                 setter was on shift that day (csr_shifts, written by Viktor after the
 //                 Start of Day check-in; London time) AND has a phone number (a lead with
 //                 no number can't be phoned, so it's excluded rather than counted as a
-//                 miss). Days with no shift rows fall back to the old fixed 10:00–18:00
-//                 window so history before the shift feed still renders.
+//                 miss) AND carries a campaign REF tag (see csrConstants.REF_TAG_RE) —
+//                 untagged contacts and reactivation lists aren't new enquiries. Days
+//                 with no shift rows fall back to the old fixed 10:00–18:00 window so
+//                 history before the shift feed still renders.
 //   Numerator   — those with an OUTBOUND call logged within 30 minutes of the enquiry.
 //
 // A lead with no call at all stays in the TEAM denominator and counts as a MISS — the
@@ -112,7 +114,7 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
   const [{ data: leads }, { data: calls }, coverage] = await Promise.all([
     supabase
       .from('ghl_contacts')
-      .select('source_id, date_added, phone')
+      .select('source_id, date_added, phone, tags')
       .eq('location_id', clientId)
       .gte('date_added', `${range.since}T00:00:00Z`)
       .lte('date_added', `${range.until}T23:59:59Z`),
@@ -144,6 +146,8 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
     if (!l.date_added) continue;
     // No phone number → can't be a phone-response target, so it's not in the denominator.
     if (!String((l as { phone?: string | null }).phone ?? '').trim()) continue;
+    // No campaign REF tag → not a new enquiry (manual add, import, reactivation list).
+    if (!hasRefTag((l as { tags?: unknown }).tags)) continue;
     if (!onShift(l.date_added, coverage)) continue; // nobody on shift when it arrived
     leadsInHours++;
 

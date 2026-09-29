@@ -245,7 +245,7 @@ function SpeedBySetter({ rows, month }: { rows: CsrSpeedRow[]; month: string | n
         <thead>
           <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
             <th className="px-3 py-2.5 text-left font-semibold">Setter</th>
-            <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Leads on shift <InfoTip text="New leads (with a phone number) on this setter's assigned clients that arrived while they were on shift, per the Start of Day check-in." /></span></th>
+            <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Leads on shift <InfoTip text="New leads — contacts with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number — on this setter's assigned clients that arrived while they were on shift, per the Start of Day check-in." /></span></th>
             <th className="px-3 py-2.5 text-right font-semibold">Reached ≤{SPEED_TO_LEAD_MINUTES}m</th>
             <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Never phoned <InfoTip text="Leads that got no outbound call at all. They count as misses." /></span></th>
             <th className="px-3 py-2.5 text-right font-semibold">Speed to Lead</th>
