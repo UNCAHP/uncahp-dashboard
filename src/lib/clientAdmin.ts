@@ -13,6 +13,7 @@ export type AdminClientRow = {
   logo_url: string | null;
   notes: string | null;
   segment: 'b2c' | 'b2b';
+  csr_key: string | null;      // assigned setter (lowercased first name); null = self booking
   created_at: string;
   archived_at: string | null;
 };
@@ -30,8 +31,10 @@ export async function getAdminClients(): Promise<AdminClientRow[]> {
     .select(sel)
     .order('status', { ascending: true }) // active before archived
     .order('client_name', { ascending: true });
-  // segment arrives with migration 0017; fall back without it so the page still loads before it's run.
-  let res = await q(base + ', segment');
+  // segment (0017) and csr_key (0019) arrive with migrations; fall back so the page still
+  // loads before they're run.
+  let res = await q(base + ', segment, csr_key');
+  if (res.error) res = await q(base + ', segment');
   if (res.error) res = await q(base);
   if (res.error) throw res.error;
   const data = (res.data ?? []) as unknown as Record<string, unknown>[];
@@ -47,6 +50,7 @@ export async function getAdminClients(): Promise<AdminClientRow[]> {
     logo_url: (r.logo_url as string | null) ?? null,
     notes: (r.notes as string | null) ?? null,
     segment: (r.segment === 'b2b' ? 'b2b' : 'b2c') as 'b2c' | 'b2b',
+    csr_key: (r.csr_key as string | null) ?? null,
     created_at: r.created_at as string,
     archived_at: (r.archived_at as string | null) ?? null,
   }));

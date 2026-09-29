@@ -8,3 +8,11 @@ export const SPEED_TO_LEAD_MINUTES = 30;
 // Setting Tracker sheet into csr_sheet_bookings. Set to false to park both columns as
 // "not tracked" again, e.g. if the sheet stops being maintained.
 export const BOOKINGS_KPIS_ENABLED = true;
+
+// The appointment setters, keyed the way csr_shifts / csr_sheet_* key them (lowercased
+// first name). Used by the client form's "Assigned setter" picker.
+export const CSR_SETTERS: { key: string; label: string }[] = [
+  { key: 'cathy', label: 'Cathy' },
+  { key: 'alexis', label: 'Alexis' },
+  { key: 'maddie', label: 'Maddie' },
+];

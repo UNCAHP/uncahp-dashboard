@@ -17,9 +17,15 @@ function segmentField(fd: FormData): 'b2c' | 'b2b' {
   return field(fd, 'segment') === 'b2b' ? 'b2b' : 'b2c';
 }
 
-// The segment column arrives with migration 0017. If it isn't there yet, retry the write
-// without it so client edits keep working; the segment just won't be saved until then.
-const MISSING_SEGMENT = /segment/i;
+// Lowercased first name, or null for "no dedicated setter".
+function csrField(fd: FormData): string | null {
+  const v = (field(fd, 'csr_key') ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  return v || null;
+}
+
+// segment (0017) and csr_key (0019) arrive with migrations. If a column isn't there yet,
+// retry the write without the new fields so client edits keep working meanwhile.
+const MISSING_SEGMENT = /segment|csr_key/i;
 
 function field(fd: FormData, name: string): string | null {
   const v = (fd.get(name) ?? '').toString().trim();
@@ -121,7 +127,7 @@ export async function createClientAction(_prev: ActionState, fd: FormData): Prom
       logo_url: logo.url,
       notes: field(fd, 'notes'),
     };
-    let { error } = await supabaseAdmin.from('clients').insert({ ...row, segment: segmentField(fd) });
+    let { error } = await supabaseAdmin.from('clients').insert({ ...row, segment: segmentField(fd), csr_key: csrField(fd) });
     if (error && MISSING_SEGMENT.test(error.message)) ({ error } = await supabaseAdmin.from('clients').insert(row));
 
     if (error) return { ok: false, error: error.message };
@@ -149,6 +155,7 @@ export async function updateClientAction(_prev: ActionState, fd: FormData): Prom
       ghl_location_id,
       notes: field(fd, 'notes'),
       segment: segmentField(fd),
+      csr_key: csrField(fd),
     };
 
     // Only overwrite the GHL key when a new value is entered — leaving the field blank
@@ -163,8 +170,8 @@ export async function updateClientAction(_prev: ActionState, fd: FormData): Prom
 
     let { error } = await supabaseAdmin.from('clients').update(patch).eq('id', id);
     if (error && MISSING_SEGMENT.test(error.message)) {
-      const { segment: _segment, ...withoutSegment } = patch;
-      void _segment;
+      const { segment: _segment, csr_key: _csr, ...withoutSegment } = patch;
+      void _segment; void _csr;
       ({ error } = await supabaseAdmin.from('clients').update(withoutSegment).eq('id', id));
     }
     if (error) return { ok: false, error: error.message };

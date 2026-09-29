@@ -24,22 +24,34 @@ import { SPEED_TO_LEAD_MINUTES } from './csrConstants';
 const BUSINESS_START = 10;
 const BUSINESS_END = 18; // exclusive (6pm)
 
-// Per-day shift coverage: the union of every setter's on-shift interval, as "HH:MM"
-// London-local strings. A lead counts if its arrival time falls inside any interval.
+// Per-day shift coverage for ONE client, as "HH:MM" London-local intervals:
+//   • the client's assigned setter's shift (clients.csr_key), when they're on that day;
+//   • otherwise — assigned setter off, or no assignment — everyone who was on (cover).
+// A lead counts if its arrival time falls inside any interval for its day.
 type Coverage = Map<string, { start: string; end: string }[]>;
 
-async function getShiftCoverage(range: DateRange): Promise<Coverage> {
-  const { data } = await supabaseAdmin
-    .from('csr_shifts')
-    .select('shift_date, shift_start, shift_end, off')
-    .gte('shift_date', range.since)
-    .lte('shift_date', range.until);
-  const cov: Coverage = new Map();
-  for (const r of data ?? []) {
+async function getShiftCoverage(clientId: string, range: DateRange): Promise<Coverage> {
+  const [{ data: client }, { data: shifts }] = await Promise.all([
+    supabaseAdmin.from('clients').select('csr_key').eq('ghl_location_id', clientId).maybeSingle(),
+    supabaseAdmin
+      .from('csr_shifts')
+      .select('shift_date, csr_key, shift_start, shift_end, off')
+      .gte('shift_date', range.since)
+      .lte('shift_date', range.until),
+  ]);
+  const assigned = (client as { csr_key?: string | null } | null)?.csr_key ?? null;
+
+  const byDay = new Map<string, { csr: string; start: string; end: string }[]>();
+  for (const r of shifts ?? []) {
     if (r.off || !r.shift_start || !r.shift_end) continue;
-    const list = cov.get(r.shift_date) ?? [];
-    list.push({ start: String(r.shift_start).slice(0, 5), end: String(r.shift_end).slice(0, 5) });
-    cov.set(r.shift_date, list);
+    const list = byDay.get(r.shift_date) ?? [];
+    list.push({ csr: r.csr_key, start: String(r.shift_start).slice(0, 5), end: String(r.shift_end).slice(0, 5) });
+    byDay.set(r.shift_date, list);
+  }
+  const cov: Coverage = new Map();
+  for (const [day, list] of byDay) {
+    const own = assigned ? list.filter(x => x.csr === assigned) : [];
+    cov.set(day, (own.length ? own : list).map(({ start, end }) => ({ start, end })));
   }
   return cov;
 }
@@ -109,7 +121,7 @@ export async function getSpeedToLead(clientId: string, range: DateRange): Promis
       .select('contact_source_id, user_name, user_id, call_at, direction')
       .eq('location_id', clientId)
       .eq('direction', 'outbound'),
-    getShiftCoverage(range),
+    getShiftCoverage(clientId, range),
   ]);
 
   const callsOnFile = calls?.length ?? 0;

@@ -5,6 +5,7 @@ import {
   Plus, Pencil, Archive, ArchiveRestore, X, KeyRound, Building2, Loader2, ImageIcon, RefreshCw,
 } from 'lucide-react';
 import type { AdminClientRow } from '@/lib/clientAdmin';
+import { CSR_SETTERS } from '@/lib/csrConstants';
 import {
   createClientAction, updateClientAction, setClientStatusAction, type ActionState,
 } from '@/app/actions/clients';
@@ -385,6 +386,13 @@ function ClientFormModal({
               placeholder={mode === 'edit' && initial?.ghl_api_key_set ? '•••• leave blank to keep current' : 'Paste the sub-account API key'}
               className={inputCls}
             />
+          </Field>
+
+          <Field label="Assigned setter" hint="Whose shift this client's leads are measured against for Speed to Lead. When they're off, cover from whoever else is on shift counts.">
+            <select name="csr_key" defaultValue={initial?.csr_key ?? ''} className={inputCls}>
+              <option value="">Self booking — no dedicated setter</option>
+              {CSR_SETTERS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
           </Field>
 
           <Field label="Segment" hint="B2B clients (UNCAHP's own funnels) are still listed in Funnel Analytics, but left out of the portfolio totals.">

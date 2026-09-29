@@ -886,7 +886,7 @@ export async function getFunnelList(): Promise<FunnelListItem[]> {
 }
 
 // segment: 'b2b' clients (UNCAHP's own funnels) are listed but left out of portfolio totals.
-export type ClientOption = { client_id: string; client_name: string; logo_url?: string | null; segment?: 'b2c' | 'b2b' };
+export type ClientOption = { client_id: string; client_name: string; logo_url?: string | null; segment?: 'b2c' | 'b2b'; csr_key?: string | null };
 
 // Active clients from the registry (the source of truth). client_id here is the
 // GHL location id — the canonical key the rest of the app joins on. Only clients
@@ -901,7 +901,8 @@ export async function getActiveClients(): Promise<ClientOption[]> {
     .not('ghl_location_id', 'is', null)
     .order('client_name');
   // segment arrives with migration 0017; fall back without it until it's run.
-  let res = await q('client_name, ghl_location_id, logo_url, segment');
+  let res = await q('client_name, ghl_location_id, logo_url, segment, csr_key');
+  if (res.error) res = await q('client_name, ghl_location_id, logo_url, segment');
   if (res.error) res = await q('client_name, ghl_location_id, logo_url');
   if (res.error) throw res.error;
   const rows = (res.data ?? []) as unknown as Record<string, unknown>[];
@@ -910,6 +911,7 @@ export async function getActiveClients(): Promise<ClientOption[]> {
     client_name: (r.client_name as string) ?? (r.ghl_location_id as string),
     logo_url: (r.logo_url as string | null) ?? null,
     segment: (r.segment === 'b2b' ? 'b2b' : 'b2c') as 'b2c' | 'b2b',
+    csr_key: (r.csr_key as string | null) ?? null,
   }));
 }
 
