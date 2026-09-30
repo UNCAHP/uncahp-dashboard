@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
 import type { ClientSpeed, ClientSpeedRow, ShiftScorecard, ShiftRow, LeadEval } from '@/lib/csrMetrics';
-import { SPEED_TO_LEAD_MINUTES, CSR_SETTERS, SPEED_TIERS, SPEED_TIER_TEXT } from '@/lib/csrConstants';
+import { SPEED_TO_LEAD_MINUTES, CSR_SETTERS, SPEED_TARGET_PCT, SPEED_TARGET_TEXT } from '@/lib/csrConstants';
 import { syncClientCallsAction } from '@/app/actions/sync';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { InfoTip } from '@/components/InfoTip';
@@ -31,19 +31,14 @@ const pct = (v: number | null) => (v == null ? '—' : `${v}%`);
 const setterLabel = (key: string | null): string =>
   key ? (CSR_SETTERS.find(s => s.key === key)?.label ?? key.charAt(0).toUpperCase() + key.slice(1)) : 'Self booking';
 
-// Colour + tier come straight from the Speed-to-Lead rate against the KPI bands.
-const speedText = (v: number | null) => (v == null ? 'text-fg-dim' : v >= SPEED_TIERS.flat ? 'text-green' : v >= SPEED_TIERS.junior ? 'text-yellow' : 'text-red');
-const speedTier = (v: number | null): { label: string; cls: string } => {
-  if (v == null) return { label: '—', cls: 'text-fg-dim' };
-  if (v >= SPEED_TIERS.senior) return { label: 'Senior', cls: 'bg-green/15 text-green' };
-  if (v >= SPEED_TIERS.flat) return { label: 'Flat', cls: 'bg-green/15 text-green' };
-  if (v >= SPEED_TIERS.junior) return { label: 'Junior', cls: 'bg-yellow/15 text-yellow' };
-  return { label: 'Below target', cls: 'bg-red/15 text-red' };
-};
+// Colour + status come straight from the rate against the single 70% standard.
+const onTarget = (v: number | null) => v != null && v >= SPEED_TARGET_PCT;
+const speedText = (v: number | null) => (v == null ? 'text-fg-dim' : onTarget(v) ? 'text-green' : 'text-red');
 const TierChip = ({ v }: { v: number | null }) =>
-  v == null ? <span className="text-fg-dim">—</span> : <span className={cn('inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold', speedTier(v).cls)}>{speedTier(v).label}</span>;
+  v == null ? <span className="text-fg-dim">—</span>
+    : <span className={cn('inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold', onTarget(v) ? 'bg-green/15 text-green' : 'bg-red/15 text-red')}>{onTarget(v) ? 'On target' : 'Below target'}</span>;
 
-const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number, arriving while the client's setter (or cover) was on shift per the daily Start of Day check-in. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored KPI. Connected = a completed call of 60s+ in that window. A lead nobody phoned counts as a miss. ${SPEED_TIER_TEXT}`;
+const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number, arriving while the client's setter (or cover) was on shift per the daily Start of Day check-in. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored KPI. Connected = a completed call of 60s+ in that window. A lead nobody phoned counts as a miss. ${SPEED_TARGET_TEXT}`;
 
 export function CallTrackingView({
   overview, detail, shifts, tab, since, until,
@@ -170,7 +165,7 @@ function Overview({ overview, onOpen }: { overview: CallOverviewRow[]; onOpen: (
   // Below-target clients with enough leads to mean something, worst first.
   const attention = useMemo(() => {
     const below = overview
-      .filter(r => r.row.leads >= 5 && r.row.pct != null && r.row.pct < SPEED_TIERS.junior)
+      .filter(r => r.row.leads >= 5 && r.row.pct != null && r.row.pct < SPEED_TARGET_PCT)
       .sort((a, b) => b.row.neverCalled - a.row.neverCalled || (a.row.pct ?? 0) - (b.row.pct ?? 0));
     const items: { key: string; text: string; sub?: string }[] = below.slice(0, 4).map(r => ({
       key: r.client.client_id,
@@ -208,7 +203,7 @@ function Overview({ overview, onOpen }: { overview: CallOverviewRow[]; onOpen: (
               <th className="px-3 py-2.5 text-right font-semibold">Leads</th>
               <th className="w-[38%] px-3 py-2.5 text-left font-semibold">Outcome</th>
               <th className="px-3 py-2.5 text-right font-semibold">Speed to Lead</th>
-              <th className="px-3 py-2.5 text-right font-semibold">Tier</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Status</th>
               <th className="w-8" />
             </tr>
           </thead>
@@ -392,7 +387,7 @@ function ShiftsView({ data }: { data: ShiftScorecard }) {
   const cell = (csr: string, date: string) => days.find(d => d.date === date)?.rows.find(r => r.csr === csr) ?? null;
 
   const attention = useMemo(() => {
-    const bad = days.flatMap(d => d.rows).filter(r => !r.off && r.leads >= 3 && r.pct != null && r.pct < SPEED_TIERS.junior)
+    const bad = days.flatMap(d => d.rows).filter(r => !r.off && r.leads >= 3 && r.pct != null && r.pct < SPEED_TARGET_PCT)
       .sort((a, b) => b.date.localeCompare(a.date) || b.neverCalled - a.neverCalled);
     const items: { key: string; text: string; sub?: string }[] = bad.slice(0, 4).map(r => ({ key: `${r.date}-${r.csr}`, text: `${setterLabel(r.csr)} · ${fmtDay(r.date)} · ${r.pct}% — ${r.neverCalled} of ${r.leads} leads never phoned on a ${r.start}–${r.end} shift`, sub: r.coverLeads ? `${r.coverLeads} were cover` : undefined }));
     if (bad.length > 4) items.push({ key: 'more', text: `…and ${bad.length - 4} more shifts below target`, sub: undefined });
@@ -433,9 +428,8 @@ function ShiftsView({ data }: { data: ShiftScorecard }) {
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div className="inline-flex items-center gap-2 text-sm font-semibold text-fg"><CalendarDays size={14} className="text-pink" /> Shift calendar <span className="text-xs font-normal text-fg-dim">· click a day for the detail</span></div>
           <div className="flex items-center gap-3 text-[10px] text-fg-muted">
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-green/80" /> ≥{SPEED_TIERS.flat}%</span>
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-yellow/80" /> {SPEED_TIERS.junior}–{SPEED_TIERS.flat}%</span>
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-red/80" /> &lt;{SPEED_TIERS.junior}%</span>
+            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-green/80" /> On target (≥{SPEED_TARGET_PCT}%)</span>
+            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-red/80" /> Below {SPEED_TARGET_PCT}%</span>
             <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm border border-border bg-surface-2" /> On, no leads</span>
             <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-border" /> Off</span>
           </div>
@@ -503,7 +497,7 @@ function ShiftsView({ data }: { data: ShiftScorecard }) {
                 <th className="px-3 py-2.5 text-right font-semibold">Connected</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Never phoned</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Speed to Lead</th>
-                <th className="px-3 py-2.5 text-right font-semibold">Tier</th>
+                <th className="px-3 py-2.5 text-right font-semibold">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -530,8 +524,7 @@ function ShiftCell({ r, active, onClick }: { r: ShiftRow | null; active: boolean
     : `${setterLabel(r.csr)} · ${fmtDay(r.date)} · ${r.start}–${r.end} · ${r.leads === 0 ? 'no leads' : `${r.attempted}/${r.leads} dialled ≤${SPEED_TO_LEAD_MINUTES}m (${r.pct}%)`}`;
   const cls = r.off ? 'bg-border'
     : r.leads === 0 ? 'border border-border bg-surface-2'
-    : (r.pct ?? 0) >= SPEED_TIERS.flat ? 'bg-green/80'
-    : (r.pct ?? 0) >= SPEED_TIERS.junior ? 'bg-yellow/80'
+    : onTarget(r.pct) ? 'bg-green/80'
     : 'bg-red/80';
   return (
     <td>
