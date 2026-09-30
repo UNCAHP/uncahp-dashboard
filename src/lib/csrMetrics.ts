@@ -13,9 +13,10 @@ import { SPEED_TO_LEAD_MINUTES, hasRefTag } from './csrConstants';
 //                 the client's assigned setter (clients.csr_key), or — when they're off —
 //                 whoever else was on shift (cover). A day with no shift rows, or a lead
 //                 arriving when nobody's on, isn't measured at all.
-//   SELF-BOOKED — a lead that paid a deposit before anyone dialled (or was never dialled
-//                 and paid anyway) didn't need a call, so it's left out of the measure.
-//                 A lead that paid AFTER a call stays in — that's the KPI working.
+//   SELF-BOOKED — a lead that paid a deposit within the 30-minute window, before anyone
+//                 dialled, sorted itself out and is left out of the measure. A lead that
+//                 paid later without a call is still a missed response; one that paid
+//                 after a call stays in — that's the KPI working.
 //   ATTEMPTED   — an outbound dial within 30 min, answered or not. This is the scored KPI:
 //                 a setter can't make a lead pick up. A lead nobody phoned is a MISS.
 //   CONNECTED   — a completed outbound call of ≥60s within 30 min (the same bar as a
@@ -83,7 +84,7 @@ export type LeadEval = {
   attempted: boolean;          // dialled ≤30m
   connected: boolean;          // completed ≥60s call ≤30m
   paidAt: string | null;       // first succeeded deposit, if any
-  selfBooked: boolean;         // paid before any dial → not measured
+  selfBooked: boolean;         // paid ≤30m after enquiry, before any dial → not measured
 };
 
 type ClientAssign = { client_id: string; csr: string | null };
@@ -172,7 +173,9 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
     const mins = dial ? (Date.parse(dial.at) - Date.parse(l.date_added)) / 60000 : null;
     const conn = firstConnected.get(l.source_id);
     const paidAt = firstPaid.get(l.source_id) ?? null;
-    const selfBooked = !!paidAt && paidAt > l.date_added && (!dial || paidAt < dial.at);
+    const selfBooked = !!paidAt && paidAt > l.date_added
+      && (Date.parse(paidAt) - Date.parse(l.date_added)) / 60000 <= SPEED_TO_LEAD_MINUTES
+      && (!dial || paidAt < dial.at);
     out.push({
       client_id: l.location_id,
       source_id: l.source_id,
@@ -209,7 +212,7 @@ export type SpeedToLead = {
   connectedWithin: number;   // ...connected ≤30m (outcome)
   pct: number | null;
   neverCalled: number;
-  selfBooked: number;        // paid a deposit before any call — left out of the measure
+  selfBooked: number;        // paid a deposit ≤30m, before any call — left out of the measure
   medianMinutes: number | null;
   perCsr: CsrSpeedRow[];
   callsOnFile: number;       // rows in csr_calls for this client (0 ⇒ not synced yet)

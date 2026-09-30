@@ -38,7 +38,7 @@ const TierChip = ({ v }: { v: number | null }) =>
   v == null ? <span className="text-fg-dim">—</span>
     : <span className={cn('inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold', onTarget(v) ? 'bg-green/15 text-green' : 'bg-red/15 text-red')}>{onTarget(v) ? 'On target' : 'Below target'}</span>;
 
-const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number, arriving while the client's setter (or cover) was on shift per the daily Start of Day check-in. Leads that paid a deposit before anyone called them self-booked and are left out. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored KPI. Connected = a completed call of 60s+ in that window. A lead nobody phoned counts as a miss. ${SPEED_TARGET_TEXT}`;
+const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number, arriving while the client's setter (or cover) was on shift per the daily Start of Day check-in. Leads that paid a deposit within 30 min, before anyone called them, self-booked and are left out. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored KPI. Connected = a completed call of 60s+ in that window. A lead nobody phoned counts as a miss. ${SPEED_TARGET_TEXT}`;
 
 export function CallTrackingView({
   overview, detail, shifts, tab, since, until,
@@ -181,7 +181,7 @@ function Overview({ overview, onOpen }: { overview: CallOverviewRow[]; onOpen: (
     <>
       <Attention items={attention} allGood="Every measured client is on target for this range." />
 
-      <TeamBand leads={team.leads} attempted={team.attempted} connected={team.connected} never={team.never} pct={team.pct} note={`all measured clients${team.selfBooked ? ` · ${team.selfBooked} self-booked before a call, not counted` : ''}`} />
+      <TeamBand leads={team.leads} attempted={team.attempted} connected={team.connected} never={team.never} pct={team.pct} note={`all measured clients${team.selfBooked ? ` · ${team.selfBooked} self-booked within ${SPEED_TO_LEAD_MINUTES}m, not counted` : ''}`} />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-fg-muted">
@@ -290,7 +290,7 @@ function Detail({ row }: { row: CallDetail }) {
       )}
 
       <TeamBand leads={s.leadsInHours} attempted={s.contactedWithin} connected={s.connectedWithin} never={s.neverCalled} pct={s.pct}
-        note={`${s.medianMinutes != null ? `median ${s.medianMinutes}m to first dial` : 'no dials yet'}${s.selfBooked ? ` · ${s.selfBooked} self-booked before a call, not counted` : ''}`} />
+        note={`${s.medianMinutes != null ? `median ${s.medianMinutes}m to first dial` : 'no dials yet'}${s.selfBooked ? ` · ${s.selfBooked} self-booked within ${SPEED_TO_LEAD_MINUTES}m, not counted` : ''}`} />
 
       {s.perCsr.length > 0 && (
         <div className="rounded-2xl border border-border bg-surface p-5">
@@ -357,7 +357,7 @@ function LeadLog({ leads }: { leads: LeadEval[] }) {
                 </td>
                 <td className="px-2 py-2 text-xs text-fg-muted">{l.firstDialBy ?? '—'}</td>
                 <td className="px-2 py-2 text-right">
-                  {l.selfBooked ? <Tooltip always label={`Paid a deposit ${l.paidAt ? fmtDay(l.paidAt.slice(0, 10)) + ' ' + fmtClock(l.paidAt) : ''} before any call — not counted`} className="inline-block"><span className="rounded-md bg-pink/15 px-2 py-0.5 text-[10px] font-semibold text-pink">Self-booked</span></Tooltip>
+                  {l.selfBooked ? <Tooltip always label={`Paid a deposit ${l.paidAt ? fmtDay(l.paidAt.slice(0, 10)) + ' ' + fmtClock(l.paidAt) : ''} within 30 min, before any call — not counted`} className="inline-block"><span className="rounded-md bg-pink/15 px-2 py-0.5 text-[10px] font-semibold text-pink">Self-booked</span></Tooltip>
                     : l.connected ? <span className="rounded-md bg-green/15 px-2 py-0.5 text-[10px] font-semibold text-green">Connected</span>
                     : l.attempted ? <span className="rounded-md bg-surface-2 px-2 py-0.5 text-[10px] font-semibold text-fg-muted">Dialled, no answer</span>
                     : l.minsToDial != null ? <span className="rounded-md bg-yellow/15 px-2 py-0.5 text-[10px] font-semibold text-yellow">Late</span>
