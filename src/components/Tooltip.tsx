@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 // Wraps a single line of text with `truncate`. On hover it shows the full value in
@@ -12,11 +12,13 @@ export function Tooltip({
   label,
   children,
   className,
+  style,
   always = false,
 }: {
   label: string;
   children: ReactNode;
   className?: string;
+  style?: CSSProperties;
   always?: boolean;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
@@ -34,7 +36,7 @@ export function Tooltip({
 
   return (
     <>
-      <span ref={ref} onMouseEnter={show} onMouseLeave={hide} className={cn('block', !always && 'truncate', className)}>
+      <span ref={ref} onMouseEnter={show} onMouseLeave={hide} className={cn('block', !always && 'truncate', className)} style={style}>
         {children}
       </span>
       {pos && (

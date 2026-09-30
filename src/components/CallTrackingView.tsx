@@ -97,19 +97,20 @@ export function CallTrackingView({
 function OutcomeBar({ leads, attempted, neverCalled, connected, className }: { leads: number; attempted: number; neverCalled: number; connected?: number; className?: string }) {
   const late = Math.max(0, leads - attempted - neverCalled);
   const seg = [
-    { n: attempted, cls: 'bg-green', label: `dialled ≤${SPEED_TO_LEAD_MINUTES}m` },
-    { n: late, cls: 'bg-yellow', label: 'dialled late' },
-    { n: neverCalled, cls: 'bg-red', label: 'never phoned' },
+    { n: attempted, cls: 'bg-green', label: `dialled ≤${SPEED_TO_LEAD_MINUTES}m`, extra: connected != null ? ` (${connected} connected)` : '' },
+    { n: late, cls: 'bg-yellow', label: 'dialled late', extra: '' },
+    { n: neverCalled, cls: 'bg-red', label: 'never phoned', extra: '' },
   ];
-  const tip = leads === 0 ? 'No leads' : `${leads} leads · ${seg.map(x => `${x.n} ${x.label}`).join(' · ')}${connected != null ? ` · ${connected} connected` : ''}`;
+  const share = (n: number) => (leads ? Math.round((1000 * n) / leads) / 10 : 0);
   return (
-    <Tooltip label={tip} always className={cn('block w-full cursor-default', className)}>
-      <div className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full bg-surface-2">
-        {leads > 0 && seg.filter(x => x.n > 0).map(x => (
-          <div key={x.label} className={cn('h-full rounded-full', x.cls)} style={{ width: `${(x.n / leads) * 100}%` }} />
-        ))}
-      </div>
-    </Tooltip>
+    <div className={cn('flex h-2.5 w-full gap-0.5 overflow-visible rounded-full bg-surface-2', className)}>
+      {leads > 0 && seg.filter(x => x.n > 0).map(x => (
+        // Each segment explains itself on hover — one tooltip per colour, not one for the bar.
+        <Tooltip key={x.label} always label={`${x.n} of ${leads} ${x.label} · ${share(x.n)}%${x.extra}`} className="h-full cursor-default" style={{ width: `${(x.n / leads) * 100}%` }}>
+          <div className={cn('h-full w-full rounded-full transition-opacity hover:opacity-80', x.cls)} />
+        </Tooltip>
+      ))}
+    </div>
   );
 }
 
