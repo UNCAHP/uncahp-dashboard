@@ -1,34 +1,36 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { Fragment, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  PhoneOutgoing, PhoneCall, Clock, TrendingUp, Loader2, RefreshCw, ArrowLeft,
-  Search, ChevronRight, Zap, Users, Activity, Gauge as GaugeIcon, Trophy, Radio,
+  Loader2, RefreshCw, ArrowLeft, Search, ChevronRight, Zap, Users, CalendarDays,
+  PhoneOutgoing, PhoneOff, PhoneCall, Gauge as GaugeIcon, Moon,
 } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
-import type { CallActivity, CallSummary, DailyPoint } from '@/lib/csrMetrics';
-import { SPEED_TO_LEAD_MINUTES } from '@/lib/csrConstants';
+import type { ClientSpeed, ClientSpeedRow, ShiftScorecard, ShiftRow, LeadEval } from '@/lib/csrMetrics';
+import { SPEED_TO_LEAD_MINUTES, CSR_SETTERS } from '@/lib/csrConstants';
 import { syncClientCallsAction } from '@/app/actions/sync';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { InfoTip } from '@/components/InfoTip';
 import { cn, formatNumber } from '@/lib/utils';
 
-export type CallOverviewRow = { client: ClientOption; summary: CallSummary };
-export type CallDetail = { client: ClientOption; activity: CallActivity };
+export type CallOverviewRow = { client: ClientOption; row: ClientSpeedRow };
+export type CallDetail = { client: ClientOption; speed: ClientSpeed };
+type Tab = 'speed' | 'shifts';
 
-const fmtDuration = (sec: number | null): string => {
-  if (sec == null) return '—';
-  const m = Math.floor(sec / 60), s = sec % 60;
-  return m ? `${m}m ${s}s` : `${s}s`;
-};
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const fmtDay = (iso: string): string => {
-  const [, m, d] = iso.split('-');
-  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(m) - 1];
-  return `${Number(d)} ${mon}`;
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${d} ${MONTHS[m - 1]}`;
 };
+const fmtClock = (iso: string): string =>
+  new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
 const pct = (v: number | null) => (v == null ? '—' : `${v}%`);
-// Colour + tier are derived straight from the Speed-to-Lead rate against the KPI bands.
+const setterLabel = (key: string | null): string =>
+  key ? (CSR_SETTERS.find(s => s.key === key)?.label ?? key.charAt(0).toUpperCase() + key.slice(1)) : 'Self booking';
+
+// Colour + tier come straight from the Speed-to-Lead rate against the KPI bands.
 const speedText = (v: number | null) => (v == null ? 'text-fg-dim' : v >= 80 ? 'text-green' : v >= 75 ? 'text-yellow' : 'text-red');
 const speedTier = (v: number | null): { label: string; cls: string } => {
   if (v == null) return { label: '—', cls: 'text-fg-dim' };
@@ -37,192 +39,177 @@ const speedTier = (v: number | null): { label: string; cls: string } => {
   if (v >= 75) return { label: 'Junior', cls: 'bg-yellow/15 text-yellow' };
   return { label: 'Below target', cls: 'bg-red/15 text-red' };
 };
+const TierChip = ({ v }: { v: number | null }) =>
+  v == null ? <span className="text-fg-dim">—</span> : <span className={cn('inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold', speedTier(v).cls)}>{speedTier(v).label}</span>;
+
+const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number, arriving while the client's setter (or cover) was on shift per the daily Start of Day check-in. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored KPI. Connected = a completed call of 60s+ in that window. A lead nobody phoned counts as a miss. Targets: Junior 75% · Flat 80% · Senior 85%.`;
 
 export function CallTrackingView({
-  overview, detail, since, until,
+  overview, detail, shifts, tab, since, until,
 }: {
   overview: CallOverviewRow[];
   detail: CallDetail | null;
+  shifts: ShiftScorecard | null;
+  tab: Tab;
   since: string;
   until: string;
 }) {
   const router = useRouter();
-  const [search, setSearch] = useState('');
-
-  const navigate = (client?: string) => {
+  const navigate = (next: { client?: string; tab?: Tab }) => {
     const p = new URLSearchParams({ view: 'calls', since, until });
-    if (client) p.set('client', client);
+    if (next.client) p.set('client', next.client);
+    if (next.tab === 'shifts') p.set('ctab', 'shifts');
     router.push(`/?${p.toString()}`);
   };
 
-  if (detail) {
-    return (
-      <div className="space-y-6 p-8">
-        <button onClick={() => navigate()} className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-pink">
-          <ArrowLeft size={14} /> Call floor
-        </button>
-        <Detail row={detail} />
+  return (
+    <div className="space-y-6 p-8">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-fg">Call Tracking</h1>
+          <p className="mt-1 text-sm text-fg-muted">Speed to Lead — new leads dialled within {SPEED_TO_LEAD_MINUTES} minutes, during setter shifts.</p>
+        </div>
+        <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+          {([['speed', 'Speed to Lead', Zap], ['shifts', 'Shifts', CalendarDays]] as const).map(([key, label, Icon]) => (
+            <button key={key} onClick={() => navigate({ tab: key })}
+              className={cn('inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors', tab === key && !detail ? 'bg-pink text-black' : 'text-fg-muted hover:text-fg')}>
+              <Icon size={13} /> {label}
+            </button>
+          ))}
+        </div>
       </div>
-    );
-  }
 
-  return <Roster overview={overview} search={search} setSearch={setSearch} onOpen={navigate} />;
+      {tab === 'shifts' && shifts ? (
+        <ShiftsView data={shifts} />
+      ) : detail ? (
+        <>
+          <button onClick={() => navigate({})} className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-pink">
+            <ArrowLeft size={14} /> All clients
+          </button>
+          <Detail row={detail} />
+        </>
+      ) : (
+        <Overview overview={overview} onOpen={id => navigate({ client: id })} />
+      )}
+    </div>
+  );
 }
 
-// ─── Overview: the "call floor" — aggregate band + ranked roster ──────────────
+// ─── Overview: team band + one row per client ────────────────────────────────
 
-function Roster({
-  overview, search, setSearch, onOpen,
-}: {
-  overview: CallOverviewRow[];
-  search: string;
-  setSearch: (s: string) => void;
-  onOpen: (client: string) => void;
-}) {
-  const agg = useMemo(() => {
-    const synced = overview.filter(r => r.summary.callsOnFile > 0);
-    const dials = synced.reduce((n, r) => n + r.summary.dials, 0);
-    const conv = synced.reduce((n, r) => n + r.summary.conversations, 0);
-    return {
-      dials, conv,
-      convRate: dials ? +((100 * conv) / dials).toFixed(1) : null,
-      tracked: synced.length,
-      total: overview.length,
-      maxDials: Math.max(1, ...synced.map(r => r.summary.dials)),
-    };
+function Overview({ overview, onOpen }: { overview: CallOverviewRow[]; onOpen: (client: string) => void }) {
+  const [search, setSearch] = useState('');
+  const team = useMemo(() => {
+    const t = overview.reduce((a, r) => ({
+      leads: a.leads + r.row.leads, attempted: a.attempted + r.row.attempted, connected: a.connected + r.row.connected, never: a.never + r.row.neverCalled,
+    }), { leads: 0, attempted: 0, connected: 0, never: 0 });
+    return { ...t, pct: t.leads ? +((100 * t.attempted) / t.leads).toFixed(1) : null };
   }, [overview]);
 
-  // Busiest first; not-yet-synced clients sink to the bottom.
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return [...overview]
-      .filter(r => !q || r.client.client_name.toLowerCase().includes(q))
-      .sort((a, b) => Number(b.summary.callsOnFile > 0) - Number(a.summary.callsOnFile > 0) || b.summary.dials - a.summary.dials);
+      .filter(r => !q || r.client.client_name.toLowerCase().includes(q) || setterLabel(r.row.csr).toLowerCase().includes(q))
+      .sort((a, b) => b.row.leads - a.row.leads || a.client.client_name.localeCompare(b.client.client_name));
   }, [overview, search]);
 
   return (
-    <div className="space-y-6 p-8">
-      {/* Aggregate band — the pulse of every client's phone room, side by side */}
-      <div className="grid grid-cols-2 gap-3 rounded-2xl border border-border bg-gradient-to-br from-surface-2/60 via-surface to-surface p-4 lg:grid-cols-4">
-        <BandStat icon={PhoneOutgoing} tint="text-pink" label="Total dials" value={formatNumber(agg.dials)} note="outbound, all clients" />
-        <BandStat icon={PhoneCall} tint="text-green" label="Conversations" value={formatNumber(agg.conv)} note="connected ≥60s" />
-        <BandStat icon={TrendingUp} tint="text-fg" label="Connect rate" value={pct(agg.convRate)} note="conv ÷ dials" />
-        <BandStat icon={Radio} tint="text-fg" label="Clients tracked" value={`${agg.tracked}`} note={`of ${agg.total} with call data`} />
-      </div>
+    <>
+      <TeamBand leads={team.leads} attempted={team.attempted} connected={team.connected} never={team.never} pct={team.pct} note="all measured clients" />
 
       <div className="flex items-center justify-between gap-3">
         <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-fg-muted">
-          <Trophy size={13} className="text-pink" /> Ranked by call volume
+          <Users size={13} className="text-pink" /> By client <InfoTip text="Only B2C clients with an assigned setter are measured. Self-booking clients book themselves, so a phone-response KPI doesn't apply." />
         </div>
         <div className="relative w-full max-w-xs">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search clients…"
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search clients or setters…"
             className="w-full rounded-lg border border-border bg-surface py-2 pl-9 pr-3 text-sm text-fg placeholder:text-fg-dim focus:border-border-strong focus:outline-none" />
         </div>
       </div>
 
-      {/* Roster — one horizontal strip per client, with a shared-scale volume bar */}
       <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-        {rows.length === 0 && <div className="px-5 py-12 text-center text-sm text-fg-dim">No clients match “{search}”.</div>}
-        {rows.map((r, i) => (
-          <RosterRow key={r.client.client_id} row={r} rank={r.summary.callsOnFile > 0 ? i + 1 : null} maxDials={agg.maxDials} onClick={() => onOpen(r.client.client_id)} />
-        ))}
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
+              <th className="px-4 py-2.5 text-left font-semibold">Client</th>
+              <th className="px-3 py-2.5 text-left font-semibold">Setter</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Leads on shift</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Attempted ≤{SPEED_TO_LEAD_MINUTES}m</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Connected</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Never phoned</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Speed to Lead</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Tier</th>
+              <th className="w-8" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.client.client_id} onClick={() => onOpen(r.client.client_id)} className="group cursor-pointer border-b border-border/50 transition-colors hover:bg-white/[0.02]">
+                <td className="px-4 py-3">
+                  <span className="inline-flex items-center gap-2.5"><Badge c={r.client} /><span className="font-medium text-fg group-hover:text-pink">{r.client.client_name}</span></span>
+                </td>
+                <td className="px-3 py-3 text-fg-muted">{setterLabel(r.row.csr)}</td>
+                <td className="px-3 py-3 text-right font-mono tabular-nums text-fg">{r.row.leads}</td>
+                <td className="px-3 py-3 text-right font-mono tabular-nums text-green">{r.row.attempted}</td>
+                <td className="px-3 py-3 text-right font-mono tabular-nums text-fg-muted">{r.row.connected}</td>
+                <td className="px-3 py-3 text-right font-mono tabular-nums text-red">{r.row.neverCalled}</td>
+                <td className={cn('px-3 py-3 text-right font-mono font-semibold tabular-nums', speedText(r.row.pct))}>{pct(r.row.pct)}</td>
+                <td className="px-3 py-3 text-right"><TierChip v={r.row.pct} /></td>
+                <td className="pr-3"><ChevronRight size={15} className="text-fg-dim transition-transform group-hover:translate-x-0.5 group-hover:text-pink" /></td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={9} className="px-4 py-12 text-center text-sm text-fg-dim">{search ? `No clients match “${search}”.` : 'No measured clients in this range.'}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function TeamBand({ leads, attempted, connected, never, pct: rate, note }: { leads: number; attempted: number; connected: number; never: number; pct: number | null; note: string }) {
+  return (
+    <div className="grid gap-4 rounded-2xl border border-border bg-gradient-to-br from-surface-2/50 to-surface p-5 lg:grid-cols-[auto_1fr]">
+      <div className="flex items-center gap-4">
+        <Gauge value={rate} size={120} />
+        <div>
+          <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-muted"><Zap size={12} className="text-pink" /> Speed to Lead <InfoTip text={DEFINITION} /></div>
+          <div className="mt-1"><TierChip v={rate} /></div>
+          <div className="mt-1.5 text-[11px] text-fg-dim">{note}</div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Vital icon={GaugeIcon} tint="text-fg" label="Leads on shift" value={formatNumber(leads)} />
+        <Vital icon={PhoneOutgoing} tint="text-green" label={`Attempted ≤${SPEED_TO_LEAD_MINUTES}m`} value={formatNumber(attempted)} sub="scored" />
+        <Vital icon={PhoneCall} tint="text-fg-muted" label={`Connected ≤${SPEED_TO_LEAD_MINUTES}m`} value={formatNumber(connected)} sub="completed, 60s+" />
+        <Vital icon={PhoneOff} tint="text-red" label="Never phoned" value={formatNumber(never)} sub="counts as a miss" />
       </div>
     </div>
   );
 }
 
-function BandStat({ icon: Icon, tint, label, value, note }: { icon: typeof PhoneOutgoing; tint: string; label: string; value: string; note: string }) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl px-1 py-1">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-2"><Icon size={17} className={tint} /></div>
-      <div className="min-w-0">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">{label}</div>
-        <div className={cn('font-mono text-xl font-bold tabular-nums leading-tight', tint)}>{value}</div>
-        <div className="truncate text-[10px] text-fg-dim">{note}</div>
-      </div>
-    </div>
-  );
-}
-
-function RosterRow({ row, rank, maxDials, onClick }: { row: CallOverviewRow; rank: number | null; maxDials: number; onClick: () => void }) {
-  const { client, summary: s } = row;
-  const synced = s.callsOnFile > 0;
-  const dialW = synced ? Math.max(2, (s.dials / maxDials) * 100) : 0;
-  const convW = synced ? (s.conversations / maxDials) * 100 : 0;
-  return (
-    <button onClick={onClick}
-      className="group grid w-full grid-cols-[2rem_1fr] items-center gap-3 border-b border-border/60 px-4 py-3.5 text-left transition-colors last:border-0 hover:bg-surface-2/40 sm:grid-cols-[2rem_minmax(0,14rem)_1fr_auto]">
-      {/* rank */}
-      <span className={cn('flex h-7 w-7 items-center justify-center rounded-lg font-mono text-xs font-bold tabular-nums',
-        rank === 1 ? 'bg-pink/20 text-pink' : rank ? 'bg-surface-2 text-fg-muted' : 'text-fg-dim')}>
-        {rank ?? '—'}
-      </span>
-
-      {/* identity */}
-      <div className="flex min-w-0 items-center gap-2.5">
-        <Badge c={client} />
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-fg group-hover:text-pink">{client.client_name}</div>
-          <div className="mt-0.5 text-[11px] text-fg-dim">
-            {synced ? <>{formatNumber(s.dials)} dials · {formatNumber(s.conversations)} conv · {pct(s.convRatePct)}</> : <span className="text-fg-muted">Not synced — open to pull calls</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* shared-scale volume bar (hidden on mobile) */}
-      <div className="hidden sm:block">
-        {synced ? (
-          <div className="relative h-6 w-full overflow-hidden rounded-md bg-surface-2/60">
-            <div className="absolute inset-y-0 left-0 rounded-md bg-pink/25" style={{ width: `${dialW}%` }} />
-            <div className="absolute inset-y-0 left-0 rounded-md bg-green/70" style={{ width: `${convW}%` }} />
-          </div>
-        ) : (
-          <div className="h-6 w-full rounded-md border border-dashed border-border/70" />
-        )}
-      </div>
-
-      {/* avg duration + chevron */}
-      <div className="hidden items-center gap-4 sm:flex">
-        <div className="text-right">
-          <div className="font-mono text-sm font-semibold tabular-nums text-fg">{synced ? fmtDuration(s.avgDurationSec) : '—'}</div>
-          <div className="text-[9px] uppercase tracking-wider text-fg-muted">avg dur.</div>
-        </div>
-        <ChevronRight size={16} className="shrink-0 text-fg-dim transition-transform group-hover:translate-x-0.5 group-hover:text-pink" />
-      </div>
-    </button>
-  );
-}
-
-// ─── Detail: one client's call floor ─────────────────────────────────────────
+// ─── Detail: one client — headline, who dialled, and the lead-by-lead log ────
 
 function Detail({ row }: { row: CallDetail }) {
-  const { client, activity: a } = row;
+  const { client, speed: s } = row;
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-
   const sync = () => {
     setMsg(null);
     start(async () => {
       const res = await syncClientCallsAction(client.client_id, 30);
-      setMsg(res.ok
-        ? { ok: true, text: `Synced ${res.calls ?? 0} calls from ${res.conversationsScanned ?? 0} conversations.` }
-        : { ok: false, text: res.error ?? 'Sync failed' });
+      setMsg(res.ok ? { ok: true, text: `Synced ${res.calls ?? 0} calls from ${res.conversationsScanned ?? 0} conversations.` } : { ok: false, text: res.error ?? 'Sync failed' });
     });
   };
 
-  // Speed-to-Lead focused leaderboard: rank by leads phoned (volume), not dials.
-  const setters = [...a.setters].sort((x, y) => y.speedLeads - x.speedLeads || y.speedWithin - x.speedWithin);
-
   return (
     <div className="space-y-5">
-      {/* Command bar */}
       <div className="flex flex-col gap-4 rounded-2xl border border-border bg-gradient-to-br from-surface-2/50 to-surface p-6 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3.5">
           <Badge c={client} big />
           <div>
             <h2 className="text-2xl font-bold tracking-tight text-fg">{client.client_name}</h2>
-            <p className="text-xs text-fg-muted">Call floor · conversation = connected call ≥60s</p>
+            <p className="text-xs text-fg-muted">Assigned setter · <span className="text-fg">{setterLabel(s.assigned)}</span></p>
           </div>
         </div>
         <button onClick={sync} disabled={pending}
@@ -231,146 +218,189 @@ function Detail({ row }: { row: CallDetail }) {
         </button>
       </div>
 
-      {msg && (
-        <div className={cn('rounded-lg border px-3 py-2 text-xs', msg.ok ? 'border-border bg-surface text-fg-muted' : 'border-red/30 bg-red/10 text-red')}>
-          {msg.text}
+      {msg && <div className={cn('rounded-lg border px-3 py-2 text-xs', msg.ok ? 'border-border bg-surface text-fg-muted' : 'border-red/30 bg-red/10 text-red')}>{msg.text}</div>}
+
+      {s.callsOnFile === 0 && (
+        <div className="rounded-xl border border-yellow/30 bg-yellow/10 px-4 py-2.5 text-xs text-yellow">
+          No calls on file for this client yet — every lead below shows as never phoned. Hit <span className="font-semibold">Sync calls</span> to pull recent activity from GHL.
         </div>
       )}
 
-      {a.callsOnFile === 0 ? (
-        <div className="rounded-2xl border border-yellow/30 bg-yellow/10 p-8 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-yellow/15"><PhoneOutgoing size={20} className="text-yellow" /></div>
-          <div className="text-sm font-medium text-yellow">No calls on file yet</div>
-          <p className="mx-auto mt-1 max-w-sm text-xs text-yellow/80">Hit <span className="font-semibold">Sync calls</span> to pull this client&apos;s recent call activity from GHL. If it stays empty, the client may handle enquiries by SMS only.</p>
+      <TeamBand leads={s.leadsInHours} attempted={s.contactedWithin} connected={s.connectedWithin} never={s.neverCalled} pct={s.pct}
+        note={s.medianMinutes != null ? `median ${s.medianMinutes}m to first dial` : 'no dials yet'} />
+
+      {s.perCsr.length > 0 && (
+        <div className="rounded-2xl border border-border bg-surface p-5">
+          <div className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-fg"><Users size={14} className="text-pink" /> Who dialled first</div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
+                <th className="px-2 py-2 text-left font-semibold">Setter</th>
+                <th className="px-2 py-2 text-right font-semibold">Leads phoned</th>
+                <th className="px-2 py-2 text-right font-semibold">≤{SPEED_TO_LEAD_MINUTES}m</th>
+                <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Of their dials <InfoTip text="Of the leads this person was first to phone, the share dialled within 30 min. The client's scored rate above also counts never-phoned leads as misses." /></span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {s.perCsr.map(r => (
+                <tr key={r.csr} className="border-b border-border/50">
+                  <td className="px-2 py-2.5 font-medium text-fg">{r.csr}</td>
+                  <td className="px-2 py-2.5 text-right font-mono tabular-nums">{r.called}</td>
+                  <td className="px-2 py-2.5 text-right font-mono tabular-nums text-green">{r.within}</td>
+                  <td className={cn('px-2 py-2.5 text-right font-mono tabular-nums', speedText(r.pct))}>{pct(r.pct)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+      )}
+
+      <LeadLog leads={s.leads} />
+    </div>
+  );
+}
+
+function LeadLog({ leads }: { leads: LeadEval[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const list = showAll ? leads : leads.slice(0, 40);
+  return (
+    <div className="rounded-2xl border border-border bg-surface p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="inline-flex items-center gap-2 text-sm font-semibold text-fg"><PhoneOutgoing size={14} className="text-pink" /> Lead log <span className="text-xs font-normal text-fg-dim">· {leads.length} measured lead{leads.length === 1 ? '' : 's'}, newest first</span></div>
+      </div>
+      {leads.length === 0 ? (
+        <div className="py-8 text-center text-xs text-fg-dim">No measured leads in this range.</div>
       ) : (
-        <>
-          {/* Speed-to-Lead spotlight: the headline KPI as a radial gauge */}
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,20rem)_1fr]">
-            <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-gradient-to-br from-surface-2/40 to-surface p-6">
-              <div className="flex items-center gap-1.5 self-start text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-                <Zap size={13} className="text-pink" /> Speed to Lead
-                <InfoTip text={`Of ALL new leads that came in while a setter was on shift (from the Start of Day check-in), the % with an outbound dial within ${SPEED_TO_LEAD_MINUTES} minutes, answered or not. 'Connected' = a completed call of 60s+ in that window. A lead never phoned counts as a miss. Calls made off GHL aren't seen.`} />
-              </div>
-              <Gauge value={a.speed.pct} />
-              <span className={cn('rounded-md px-2.5 py-1 text-xs font-semibold', speedTier(a.speed.pct).cls)}>{speedTier(a.speed.pct).label}</span>
-              <div className="text-center text-[11px] text-fg-dim">
-                {a.speed.contactedWithin}/{a.speed.leadsInHours} leads dialled ≤{SPEED_TO_LEAD_MINUTES}m
-                {a.speed.medianMinutes != null && <> · median {a.speed.medianMinutes}m</>}
-                {' · '}<span className="text-fg-muted">{a.speed.connectedWithin} connected</span>
-              </div>
-              <div className="text-center text-[10px] text-fg-dim">
-                {a.speed.leadsInHours} new leads on shift · <span className="text-fg-muted">{a.speed.neverCalled} never phoned</span> (counts as a miss)
-              </div>
-            </div>
-
-            {/* Vitals + funnel of leads */}
-            <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <Vital icon={PhoneOutgoing} tint="text-pink" label="Dials" value={formatNumber(a.dials)} sub="outbound" info="Every outbound call the setters made in this range (connected or not)." />
-                <Vital icon={PhoneCall} tint="text-green" label="Conversations" value={formatNumber(a.conversations)} sub="≥60s" info="Dials that turned into a real conversation — a connected call lasting at least 60 seconds." />
-                <Vital icon={TrendingUp} tint="text-fg" label="Connect rate" value={pct(a.convRatePct)} sub="conv ÷ dials" info="How often a dial becomes a real conversation." />
-                <Vital icon={Clock} tint="text-fg" label="Avg duration" value={fmtDuration(a.avgDurationSec)} sub="on conv." info="Average length of the conversations (calls ≥60s)." />
-              </div>
-
-              {a.speed.leadsInHours > 0 && (
-                <div className="rounded-2xl border border-border bg-surface p-5">
-                  <div className="mb-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-                    <GaugeIcon size={13} className="text-pink" /> New leads on shift
-                    <InfoTip text="New leads — contacts with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number — that arrived while this client's setter (or cover) was on shift, per the daily Start of Day check-in. Days with no shift data aren't measured. Speed to Lead is measured on ALL of them — a lead never phoned counts as a miss. Leads with no number are excluded (they can't be called)." />
-                  </div>
-                  <LeadSplit leads={a.speed.leadsInHours} phoned={a.speed.phoned} within={a.speed.contactedWithin} />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Setter leaderboard */}
-          <div className="rounded-2xl border border-border bg-surface p-6">
-            <div className="mb-4 flex items-center gap-2">
-              <Users size={15} className="text-pink" />
-              <div className="text-sm font-semibold text-fg">Speed to Lead · by setter</div>
-              <span className="text-[11px] text-fg-dim">· ranked by leads phoned</span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
-                    <th className="px-2 py-2 text-left font-semibold">#</th>
-                    <th className="px-2 py-2 text-left font-semibold">Setter</th>
-                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Phoned <InfoTip text="New leads (arrived on shift) this setter was the FIRST to phone." /></span></th>
-                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Not phoned <InfoTip text="New leads (arrived on shift) that were never phoned. These can't be pinned on a person (leads route to the AI agent), so per-setter shows '—' and the team's total sits in the 'No phone call' row + Total." /></span></th>
-                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">≤{SPEED_TO_LEAD_MINUTES}m <InfoTip text={`Of the leads this setter phoned, how many within ${SPEED_TO_LEAD_MINUTES} minutes of the enquiry.`} /></span></th>
-                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text="Per setter: reached ≤30m ÷ the leads they phoned. Team total (bottom row) = reached ≤30m ÷ ALL new leads that arrived on shift, so never-phoned leads count as misses there." /></span></th>
-                    <th className="px-2 py-2 text-right font-semibold"><span className="inline-flex items-center gap-1">Tier <InfoTip text="Performance level from the speed-to-lead rate — Senior ≥85%, Flat ≥80%, Junior ≥75%, and below 75% is under target." /></span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {setters.map((s, i) => (
-                    <tr key={s.csr} className="border-b border-border/50 last:border-0">
-                      <td className="px-2 py-3">
-                        <span className={cn('flex h-6 w-6 items-center justify-center rounded-md font-mono text-[11px] font-bold tabular-nums', i === 0 ? 'bg-pink/20 text-pink' : 'bg-surface-2 text-fg-muted')}>{i + 1}</span>
-                      </td>
-                      <td className="px-2 py-3 font-medium text-fg">{s.csr}</td>
-                      <td className="px-2 py-3 text-right tabular-nums text-fg">{s.speedLeads}</td>
-                      <td className="px-2 py-3 text-right tabular-nums text-fg-dim">—</td>
-                      <td className="px-2 py-3 text-right tabular-nums text-fg">{s.speedWithin}</td>
-                      <td className={cn('px-2 py-3 text-right font-mono font-semibold tabular-nums', speedText(s.speedToLeadPct))}>{pct(s.speedToLeadPct)}</td>
-                      <td className="px-2 py-3 text-right">
-                        <span className={cn('inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold', speedTier(s.speedToLeadPct).cls)}>{speedTier(s.speedToLeadPct).label}</span>
-                      </td>
-                    </tr>
-                  ))}
-                  {a.speed.leadsInHours > 0 && (
-                    <>
-                      {a.speed.neverCalled > 0 && (
-                        <tr className="border-b border-border/50 text-fg-dim">
-                          <td className="px-2 py-3"></td>
-                          <td className="px-2 py-3"><span className="inline-flex items-center gap-1 italic">No phone call <InfoTip text="New leads (arrived on shift) that were never phoned — a miss at the team level. Can't be pinned on a setter (leads route to the AI agent), so they only drag the team Total, not an individual's rate." /></span></td>
-                          <td className="px-2 py-3 text-right">—</td>
-                          <td className="px-2 py-3 text-right tabular-nums text-red">{a.speed.neverCalled}</td>
-                          <td className="px-2 py-3 text-right">—</td>
-                          <td className="px-2 py-3 text-right">—</td>
-                          <td className="px-2 py-3 text-right">—</td>
-                        </tr>
-                      )}
-                      <tr className="border-t border-border font-semibold text-fg">
-                        <td className="px-2 py-3"></td>
-                        <td className="px-2 py-3">Total <span className="font-normal text-fg-dim">· all new leads on shift</span></td>
-                        <td className="px-2 py-3 text-right tabular-nums">{a.speed.phoned}</td>
-                        <td className="px-2 py-3 text-right tabular-nums">{a.speed.neverCalled}</td>
-                        <td className="px-2 py-3 text-right tabular-nums">{a.speed.contactedWithin}</td>
-                        <td className={cn('px-2 py-3 text-right font-mono tabular-nums', speedText(a.speed.pct))} title={`${a.speed.contactedWithin} of ${a.speed.leadsInHours} new leads reached ≤${SPEED_TO_LEAD_MINUTES}m`}>{pct(a.speed.pct)}</td>
-                        <td className="px-2 py-3 text-right">
-                          <span className={cn('inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold', speedTier(a.speed.pct).cls)}>{speedTier(a.speed.pct).label}</span>
-                        </td>
-                      </tr>
-                    </>
-                  )}
-                  {a.setters.length === 0 && a.speed.leadsInHours === 0 && <tr><td colSpan={7} className="px-2 py-6 text-center text-xs text-fg-dim">No call or lead activity in this range.</td></tr>}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Daily activity */}
-          <div className="rounded-2xl border border-border bg-surface p-6">
-            <div className="mb-1 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-semibold text-fg"><Activity size={15} className="text-pink" /> Daily activity</div>
-              <Legend />
-            </div>
-            <DailyChart data={a.daily} />
-          </div>
-        </>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
+              <th className="px-2 py-2 text-left font-semibold">Arrived</th>
+              <th className="px-2 py-2 text-left font-semibold">Lead</th>
+              <th className="px-2 py-2 text-left font-semibold"><span className="inline-flex items-center gap-1">Responsible <InfoTip text="The assigned setter if they were on shift when it arrived; otherwise whoever was covering." /></span></th>
+              <th className="px-2 py-2 text-right font-semibold">First dial</th>
+              <th className="px-2 py-2 text-left font-semibold">By</th>
+              <th className="px-2 py-2 text-right font-semibold">Outcome</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map(l => (
+              <tr key={l.source_id} className="border-b border-border/40">
+                <td className="whitespace-nowrap px-2 py-2 font-mono text-xs tabular-nums text-fg-muted">{fmtDay(l.day)} · {fmtClock(l.arrivedAt)}</td>
+                <td className="px-2 py-2 text-fg">{l.name}</td>
+                <td className="px-2 py-2 text-fg-muted">{setterLabel(l.responsible)}{l.cover && <span className="ml-1 rounded bg-border px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-fg-dim">cover</span>}</td>
+                <td className={cn('whitespace-nowrap px-2 py-2 text-right font-mono text-xs tabular-nums', l.minsToDial == null ? 'text-red' : l.attempted ? 'text-green' : 'text-yellow')}>
+                  {l.minsToDial == null ? 'never' : l.minsToDial < 60 ? `${l.minsToDial}m` : l.minsToDial < 1440 ? `${Math.round(l.minsToDial / 60)}h` : `${Math.round(l.minsToDial / 1440)}d`}
+                </td>
+                <td className="px-2 py-2 text-xs text-fg-muted">{l.firstDialBy ?? '—'}</td>
+                <td className="px-2 py-2 text-right">
+                  {l.connected ? <span className="rounded-md bg-green/15 px-2 py-0.5 text-[10px] font-semibold text-green">Connected</span>
+                    : l.attempted ? <span className="rounded-md bg-surface-2 px-2 py-0.5 text-[10px] font-semibold text-fg-muted">Dialled, no answer</span>
+                    : l.minsToDial != null ? <span className="rounded-md bg-yellow/15 px-2 py-0.5 text-[10px] font-semibold text-yellow">Late</span>
+                    : <span className="rounded-md bg-red/15 px-2 py-0.5 text-[10px] font-semibold text-red">Missed</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {leads.length > 40 && !showAll && (
+        <button onClick={() => setShowAll(true)} className="mt-3 text-xs font-medium text-fg-muted hover:text-pink">Show all {leads.length} leads</button>
       )}
     </div>
   );
 }
 
-// ─── Pieces ──────────────────────────────────────────────────────────────────
+// ─── Shifts: every setter's hours each day, with their Speed to Lead on that shift ──
+
+function ShiftsView({ data }: { data: ShiftScorecard }) {
+  if (data.days.length === 0) {
+    return (
+      <div className="rounded-2xl border border-border bg-surface p-12 text-center">
+        <CalendarDays size={22} className="mx-auto mb-2 text-fg-dim" />
+        <div className="text-sm text-fg">No shift data in this range</div>
+        <p className="mx-auto mt-1 max-w-sm text-xs text-fg-muted">Viktor writes each setter&apos;s hours here after the morning Start of Day check-in.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-5">
+      {/* Per-setter summary for the range */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        {data.setters.map(s => (
+          <div key={s.csr} className="rounded-2xl border border-border bg-surface p-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-fg">{setterLabel(s.csr)}</div>
+              <TierChip v={s.pct} />
+            </div>
+            <div className={cn('mt-1 font-mono text-3xl font-bold tabular-nums', speedText(s.pct))}>{pct(s.pct)}</div>
+            <div className="mt-1 text-[11px] text-fg-dim">
+              {s.attempted}/{s.leads} dialled ≤{SPEED_TO_LEAD_MINUTES}m · {s.connected} connected · <span className="text-red/80">{s.neverCalled} never</span> · {s.shifts} shift{s.shifts === 1 ? '' : 's'}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Day by day */}
+      <div className="overflow-hidden rounded-2xl border border-border bg-surface">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
+              <th className="px-4 py-2.5 text-left font-semibold">Setter</th>
+              <th className="px-3 py-2.5 text-left font-semibold">Shift</th>
+              <th className="px-3 py-2.5 text-right font-semibold"><span className="inline-flex items-center gap-1">Leads <InfoTip text="New leads this setter was responsible for during this shift — their own clients, plus any they covered (marked)." /></span></th>
+              <th className="px-3 py-2.5 text-right font-semibold">Attempted ≤{SPEED_TO_LEAD_MINUTES}m</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Connected</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Never phoned</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Speed to Lead</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Tier</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.days.map(d => (
+              <Fragment key={d.date}>
+                <tr className="border-b border-border/60 bg-black/20">
+                  <td colSpan={8} className="px-4 py-2 text-xs font-semibold text-fg">{fmtDay(d.date)}</td>
+                </tr>
+                {d.rows.map(r => <ShiftLine key={`${d.date}-${r.csr}`} r={r} />)}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ShiftLine({ r }: { r: ShiftRow }) {
+  if (r.off) {
+    return (
+      <tr className="border-b border-border/40 text-fg-dim">
+        <td className="px-4 py-2.5">{setterLabel(r.csr)}</td>
+        <td className="px-3 py-2.5"><span className="inline-flex items-center gap-1.5 text-xs"><Moon size={12} /> Off</span></td>
+        <td colSpan={6} />
+      </tr>
+    );
+  }
+  return (
+    <tr className="border-b border-border/40">
+      <td className="px-4 py-2.5 font-medium text-fg">{setterLabel(r.csr)}</td>
+      <td className="px-3 py-2.5 font-mono text-xs tabular-nums text-fg-muted">{r.start}–{r.end}</td>
+      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-fg">
+        {r.leads}{r.coverLeads > 0 && <span className="ml-1 text-[10px] text-fg-dim">({r.coverLeads} cover)</span>}
+      </td>
+      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-green">{r.attempted}</td>
+      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-fg-muted">{r.connected}</td>
+      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-red">{r.neverCalled}</td>
+      <td className={cn('px-3 py-2.5 text-right font-mono font-semibold tabular-nums', speedText(r.pct))}>{pct(r.pct)}</td>
+      <td className="px-3 py-2.5 text-right"><TierChip v={r.pct} /></td>
+    </tr>
+  );
+}
+
+// ─── Shared bits ─────────────────────────────────────────────────────────────
 
 function Badge({ c, big = false }: { c: ClientOption; big?: boolean }) {
-  const cls = big ? 'h-12 w-12 rounded-2xl' : 'h-9 w-9 rounded-lg';
+  const cls = big ? 'h-12 w-12 rounded-2xl' : 'h-8 w-8 rounded-lg';
   return c.logo_url ? (
     // eslint-disable-next-line @next/next/no-img-element
     <img src={c.logo_url} alt="" className={cn(cls, 'shrink-0 border border-border object-cover')} />
@@ -381,128 +411,38 @@ function Badge({ c, big = false }: { c: ClientOption; big?: boolean }) {
   );
 }
 
-// Radial gauge for the Speed-to-Lead rate. The arc + centre number take the band colour.
-function Gauge({ value, size = 168 }: { value: number | null; size?: number }) {
-  const stroke = 13;
-  const r = (size - stroke) / 2;
-  const circ = 2 * Math.PI * r;
-  const v = value == null ? 0 : Math.max(0, Math.min(100, value));
-  const colorCls = speedText(value);
+function Vital({ icon: Icon, tint, label, value, sub }: { icon: typeof PhoneOutgoing; tint: string; label: string; value: string; sub?: string }) {
   return (
-    <div className="relative" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} className="stroke-current text-surface-2" />
-        <circle
-          cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} strokeLinecap="round"
-          className={cn('stroke-current transition-[stroke-dashoffset] duration-700', colorCls)}
-          strokeDasharray={circ} strokeDashoffset={circ * (1 - v / 100)}
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={cn('font-mono text-4xl font-bold tabular-nums', colorCls)}>{value == null ? '—' : `${value}`}</span>
-        {value != null && <span className={cn('text-xs font-semibold', colorCls)}>%</span>}
-      </div>
-    </div>
-  );
-}
-
-function Vital({ icon: Icon, tint, label, value, sub, info }: { icon: typeof PhoneOutgoing; tint: string; label: string; value: string; sub?: string; info?: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-surface-2/30 p-4">
+    <div className="rounded-xl border border-border bg-surface-2/30 p-3.5">
       <div className="flex items-center gap-1.5">
-        <Icon size={14} className={tint} />
+        <Icon size={13} className={tint} />
         <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-muted">{label}</span>
-        {info && <InfoTip text={info} />}
       </div>
-      <div className={cn('mt-2 font-mono text-2xl font-bold tabular-nums', tint)}>{value}</div>
+      <div className={cn('mt-1.5 font-mono text-2xl font-bold tabular-nums', tint)}>{value}</div>
       {sub && <div className="mt-0.5 text-[10px] text-fg-dim">{sub}</div>}
     </div>
   );
 }
 
-// A three-segment horizontal funnel: all leads → phoned → reached ≤30m.
-function LeadSplit({ leads, phoned, within }: { leads: number; phoned: number; within: number }) {
-  const seg = [
-    { label: 'New leads', value: leads, cls: 'bg-surface-2', text: 'text-fg' },
-    { label: 'Phoned', value: phoned, cls: 'bg-pink/50', text: 'text-pink' },
-    { label: `Reached ≤${SPEED_TO_LEAD_MINUTES}m`, value: within, cls: 'bg-green/70', text: 'text-green' },
-  ];
+// Radial gauge for the Speed-to-Lead rate. The arc + centre number take the band colour.
+function Gauge({ value, size = 168 }: { value: number | null; size?: number }) {
+  const stroke = Math.round(size / 13);
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const v = value == null ? 0 : Math.max(0, Math.min(100, value));
+  const colorCls = speedText(value);
   return (
-    <div className="flex items-end gap-2">
-      {seg.map(s => (
-        <div key={s.label} className="flex-1">
-          <div className="mb-1 flex items-baseline gap-1.5">
-            <span className={cn('font-mono text-sm font-bold tabular-nums', s.text)}>{formatNumber(s.value)}</span>
-            <span className="truncate text-[10px] font-medium text-fg-muted">{s.label}</span>
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
-            <div className={cn('h-full rounded-full', s.cls)} style={{ width: `${leads ? Math.max(3, (s.value / leads) * 100) : 0}%` }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Legend() {
-  return (
-    <div className="flex items-center gap-3 text-[10px] text-fg-muted">
-      <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-pink/40" /> Dials</span>
-      <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-green/70" /> Conversations</span>
-    </div>
-  );
-}
-
-// Stacked daily bars — full height = dials, green base = conversations (a subset).
-// Hover any day's column for a tooltip with the exact dials + conversations.
-function DailyChart({ data }: { data: DailyPoint[] }) {
-  const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
-  const W = Math.max(560, data.length * 22), H = 220;
-  const pad = { t: 12, r: 8, b: 28, l: 32 };
-  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
-  const max = Math.max(1, ...data.map(d => d.dials));
-  const colW = iw / Math.max(1, data.length);
-  const bw = Math.max(3, colW * 0.62);
-  const cx = (i: number) => pad.l + (i + 0.5) * colW;
-  const y = (v: number) => pad.t + ih - (v / max) * ih;
-  const ticks = Array.from(new Set([0, Math.round(max / 2), max]));
-  const every = Math.max(1, Math.ceil(data.length / 10));
-  const at = (e: React.MouseEvent, i: number) => setHover({ i, x: e.clientX, y: e.clientY });
-  return (
-    <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ minWidth: data.length > 34 ? W : undefined }}>
-        {ticks.map(t => (
-          <g key={t}>
-            <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} className="stroke-current text-fg-dim/15" strokeDasharray="2 3" />
-            <text x={pad.l - 6} y={y(t) + 3} textAnchor="end" className="fill-current text-[9px] text-fg-dim">{t}</text>
-          </g>
-        ))}
-        {hover && <rect x={pad.l + hover.i * colW} y={pad.t} width={colW} height={ih} className="fill-current text-fg/5" pointerEvents="none" />}
-        {data.map((d, i) => (
-          <g key={d.date}>
-            <rect x={cx(i) - bw / 2} y={y(d.dials)} width={bw} height={pad.t + ih - y(d.dials)} rx={1.5} className="fill-current text-pink/30" />
-            <rect x={cx(i) - bw / 2} y={y(d.conversations)} width={bw} height={pad.t + ih - y(d.conversations)} rx={1.5} className="fill-current text-green/70" />
-          </g>
-        ))}
-        {data.map((d, i) => (i % every === 0 ? (
-          <text key={d.date} x={cx(i)} y={H - 9} textAnchor="middle" className="fill-current text-[8px] text-fg-dim">{fmtDay(d.date)}</text>
-        ) : null))}
-        {/* transparent hit areas — one per day column — capture the hover */}
-        {data.map((d, i) => (
-          <rect key={`hit-${d.date}`} x={pad.l + i * colW} y={pad.t} width={colW} height={ih} fill="transparent"
-            onMouseEnter={e => at(e, i)} onMouseMove={e => at(e, i)} onMouseLeave={() => setHover(null)} />
-        ))}
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} className="stroke-current text-surface-2" />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} strokeLinecap="round"
+          className={cn('stroke-current transition-[stroke-dashoffset] duration-700', colorCls)}
+          strokeDasharray={circ} strokeDashoffset={circ * (1 - v / 100)} />
       </svg>
-      {hover && (
-        <div
-          className="pointer-events-none fixed z-[100] -translate-x-1/2 -translate-y-full rounded-md border border-border-strong bg-surface-2 px-2.5 py-1.5 text-[11px] leading-snug shadow-lg"
-          style={{ left: hover.x, top: hover.y - 10 }}
-        >
-          <div className="mb-0.5 font-semibold text-fg">{fmtDay(data[hover.i].date)}</div>
-          <div className="whitespace-nowrap text-fg-muted">Dials <span className="ml-1 tabular-nums font-semibold text-pink">{data[hover.i].dials}</span></div>
-          <div className="whitespace-nowrap text-fg-muted">Conversations <span className="ml-1 tabular-nums font-semibold text-green">{data[hover.i].conversations}</span></div>
-        </div>
-      )}
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className={cn('font-mono font-bold tabular-nums', colorCls, size < 140 ? 'text-2xl' : 'text-4xl')}>{value == null ? '—' : `${value}`}</span>
+        {value != null && <span className={cn('text-[10px] font-semibold', colorCls)}>%</span>}
+      </div>
     </div>
   );
 }

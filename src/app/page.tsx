@@ -15,6 +15,7 @@ import { CampaignExplorer } from '@/components/CampaignExplorer';
 import { PlaceholderView } from '@/components/PlaceholderView';
 import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
 import { CallTrackingView, type CallOverviewRow, type CallDetail } from '@/components/CallTrackingView';
+import type { ShiftScorecard } from '@/lib/csrMetrics';
 import { BookingsView } from '@/components/BookingsView';
 import { AllBookingsView } from '@/components/AllBookingsView';
 import { KpisView } from '@/components/KpisView';
@@ -29,7 +30,7 @@ import {
 } from '@/lib/queries';
 import { getAdminClients } from '@/lib/clientAdmin';
 import { getAdminFunnels } from '@/lib/funnelAdmin';
-import { getCallSummary, getCallActivity } from '@/lib/csrMetrics';
+import { getClientSpeed, getClientSpeedRows, getShiftScorecard } from '@/lib/csrMetrics';
 import { setterClients } from '@/lib/csrConstants';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
@@ -38,7 +39,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
-type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; ftab?: string };
+type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; ftab?: string; ctab?: string };
 
 function parseView(v: string | undefined): View {
   const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
@@ -157,17 +158,23 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     optimisations = await getOptimisations(optimisationMonth, adminFunnels);
   }
 
-  // Call Tracking. Overview = a light per-client summary card; drilling in (?client=)
-  // computes the full setter breakdown + charts for one client. Only on the calls view.
+  // Call Tracking — Speed to Lead only. Two tabs: per-client ("speed", with a drill-in)
+  // and per-shift ("shifts"). Only B2C clients with an assigned setter are measured.
+  const ctab = params.ctab === 'shifts' ? 'shifts' : 'speed';
   let callsOverview: CallOverviewRow[] = [];
   let callsDetail: CallDetail | null = null;
+  let callsShifts: ShiftScorecard | null = null;
   if (view === 'calls') {
+    const measured = setterClients(clients).map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null }));
     const detailClient = callsClient ? clients.find(c => c.client_id === callsClient) : undefined;
-    if (detailClient) {
-      callsDetail = { client: detailClient, activity: await getCallActivity(detailClient.client_id, range) };
+    if (ctab === 'shifts') {
+      callsShifts = await getShiftScorecard(measured, range);
+    } else if (detailClient) {
+      callsDetail = { client: detailClient, speed: await getClientSpeed(detailClient.client_id, range) };
     } else {
-      // Self-booking clients (no assigned setter) and B2B are out of the Speed-to-Lead KPI.
-      callsOverview = await Promise.all(setterClients(clients).map(async c => ({ client: c, summary: await getCallSummary(c.client_id, range) })));
+      const rows = await getClientSpeedRows(measured, range);
+      const byId = new Map(clients.map(c => [c.client_id, c]));
+      callsOverview = rows.map(r => ({ client: byId.get(r.client_id)!, row: r })).filter(r => !!r.client);
     }
   }
 
@@ -269,6 +276,8 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
           <CallTrackingView
             overview={callsOverview}
             detail={callsDetail}
+            shifts={callsShifts}
+            tab={ctab}
             since={range.since}
             until={range.until}
           />

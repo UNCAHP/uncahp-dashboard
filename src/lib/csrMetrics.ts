@@ -3,313 +3,335 @@ import type { DateRange } from './queries';
 import { SPEED_TO_LEAD_MINUTES, hasRefTag } from './csrConstants';
 
 // ─── Speed to Lead ───────────────────────────────────────────────────────────
-// "% of ALL new leads contacted by phone within 30 min of enquiry, during setter shifts".
+// "% of new leads with an outbound dial within 30 min of enquiry, during setter shifts".
 //
-//   Denominator — every lead created in range whose enquiry landed while at least one
-//                 setter was on shift that day (csr_shifts, written by Viktor after the
-//                 Start of Day check-in; London time) AND has a phone number (a lead with
-//                 no number can't be phoned, so it's excluded rather than counted as a
-//                 miss) AND carries a campaign REF tag (see csrConstants.REF_TAG_RE) —
-//                 untagged contacts and reactivation lists aren't new enquiries. A day
-//                 with no shift rows isn't measured at all — the KPI is defined by shifts,
-//                 so without them there's nothing to measure against.
-//   Numerator   — those with an OUTBOUND call logged within 30 minutes of the enquiry.
+//   A NEW LEAD  — a GHL contact created in range that has a phone number AND a campaign
+//                 REF tag (csrConstants.REF_TAG_RE). Untagged contacts and reactivation
+//                 lists aren't new enquiries.
+//   MEASURED    — only if it arrived while someone responsible was on shift (csr_shifts,
+//                 written daily by Viktor after the Start of Day check-in; London time):
+//                 the client's assigned setter (clients.csr_key), or — when they're off —
+//                 whoever else was on shift (cover). A day with no shift rows, or a lead
+//                 arriving when nobody's on, isn't measured at all.
+//   ATTEMPTED   — an outbound dial within 30 min, answered or not. This is the scored KPI:
+//                 a setter can't make a lead pick up. A lead nobody phoned is a MISS.
+//   CONNECTED   — a completed outbound call of ≥60s within 30 min (the same bar as a
+//                 "conversation"). Shown alongside as the outcome; not scored.
 //
-// A lead with no call at all stays in the TEAM denominator and counts as a MISS — the
-// point of the KPI is that every new lead gets a fast phone response. Credit for a hit
-// goes to whoever actually made the first call (the call carries the CSR). Never-phoned
-// leads can't be pinned on a person (leads route to the AI agent, not a setter), so they
-// sit in the "No phone call" bucket and drag the team rate — individual rates are of the
-// leads that setter phoned.
+// Credit for an attempt goes to whoever dialled first. Accountability for a lead (the
+// per-shift view) goes to the RESPONSIBLE setter: the assigned one if on shift, otherwise
+// the cover who dialled, otherwise the first cover on shift.
 
-// Per-day shift coverage for ONE client, as "HH:MM" London-local intervals:
-//   • the client's assigned setter's shift (clients.csr_key), when they're on that day;
-//   • otherwise — assigned setter off, or no assignment — everyone who was on (cover).
-// A lead counts if its arrival time falls inside any interval for its day.
-type Coverage = Map<string, { start: string; end: string }[]>;
+const CONVERSATION_MIN_SEC = 60;
 
-async function getShiftCoverage(clientId: string, range: DateRange): Promise<Coverage> {
-  const [{ data: client }, { data: shifts }] = await Promise.all([
-    supabaseAdmin.from('clients').select('csr_key').eq('ghl_location_id', clientId).maybeSingle(),
-    supabaseAdmin
-      .from('csr_shifts')
-      .select('shift_date, csr_key, shift_start, shift_end, off')
-      .gte('shift_date', range.since)
-      .lte('shift_date', range.until),
-  ]);
-  const assigned = (client as { csr_key?: string | null } | null)?.csr_key ?? null;
-
-  const byDay = new Map<string, { csr: string; start: string; end: string }[]>();
-  for (const r of shifts ?? []) {
-    if (r.off || !r.shift_start || !r.shift_end) continue;
-    const list = byDay.get(r.shift_date) ?? [];
-    list.push({ csr: r.csr_key, start: String(r.shift_start).slice(0, 5), end: String(r.shift_end).slice(0, 5) });
-    byDay.set(r.shift_date, list);
-  }
-  const cov: Coverage = new Map();
-  for (const [day, list] of byDay) {
-    const own = assigned ? list.filter(x => x.csr === assigned) : [];
-    cov.set(day, (own.length ? own : list).map(({ start, end }) => ({ start, end })));
-  }
-  return cov;
-}
-
-// "HH:MM" in London time.
-const londonClock = (iso: string): string =>
-  new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
-
-// Was the relevant setter (or cover) on shift when this lead arrived? No shift rows for
-// that day → not measured.
-function onShift(iso: string, cov: Coverage): boolean {
-  const shifts = cov.get(londonDate(iso));
-  if (!shifts || shifts.length === 0) return false;
-  const t = londonClock(iso);
-  return shifts.some(s => t >= s.start && t < s.end);
-}
-
-export type CsrSpeedRow = {
-  csr: string;
-  called: number;      // leads this CSR was the first to phone
-  within: number;      // ...within the 30-min target
-  pct: number | null;  // within ÷ called (this setter's phoned leads)
-};
-
-export type SpeedToLead = {
-  leadsInHours: number;      // all new leads that arrived during a setter shift (the rate's denominator)
-  phoned: number;            // ...of those, how many got a phone call (context)
-  contactedWithin: number;   // ...an outbound ATTEMPT within the 30-min target (numerator — the scored KPI)
-  connectedWithin: number;   // ...an outbound call that CONNECTED (completed, ≥60s) within 30 min — the outcome
-  pct: number | null;        // contactedWithin ÷ leadsInHours — measured on ALL new leads
-  neverCalled: number;       // leads with no phone call — a miss at the team level
-  medianMinutes: number | null;
-  perCsr: CsrSpeedRow[];
-  callsOnFile: number;       // rows in csr_calls for this client (0 ⇒ not synced yet)
-};
-
-// YYYY-MM-DD in London time — for daily buckets.
+// London-local helpers.
 const londonDate = (iso: string): string => {
   const p = new Date(iso).toLocaleDateString('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).split('/');
   return `${p[2]}-${p[1]}-${p[0]}`;
 };
+const londonClock = (iso: string): string =>
+  new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
 
-// A "conversation" = a connected call of at least this long (matches the ≥60s definition).
-const CONVERSATION_MIN_SEC = 60;
+const firstName = (s: string): string => s.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
 
-export async function getSpeedToLead(clientId: string, range: DateRange): Promise<SpeedToLead> {
-  const empty: SpeedToLead = {
-    leadsInHours: 0, phoned: 0, contactedWithin: 0, connectedWithin: 0, pct: null, neverCalled: 0,
-    medianMinutes: null, perCsr: [], callsOnFile: 0,
-  };
-  if (!clientId) return empty;
+// Supabase caps a select at 1000 rows; page through anything that can exceed it.
+async function pageAll<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build(from, from + 999);
+    if (error) throw error;
+    out.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
 
-  const [{ data: leads }, { data: calls }, coverage] = await Promise.all([
-    supabase
-      .from('ghl_contacts')
-      .select('source_id, date_added, phone, tags')
-      .eq('location_id', clientId)
-      .gte('date_added', `${range.since}T00:00:00Z`)
-      .lte('date_added', `${range.until}T23:59:59Z`),
-    supabaseAdmin
-      .from('csr_calls')
-      .select('contact_source_id, user_name, user_id, call_at, direction, status, duration_sec')
-      .eq('location_id', clientId)
-      .eq('direction', 'outbound'),
-    getShiftCoverage(clientId, range),
+export type Shift = { date: string; csr: string; start: string; end: string; off: boolean };
+
+export async function getShifts(range: DateRange): Promise<Shift[]> {
+  const { data } = await supabaseAdmin
+    .from('csr_shifts')
+    .select('shift_date, csr_key, shift_start, shift_end, off')
+    .gte('shift_date', range.since)
+    .lte('shift_date', range.until)
+    .order('shift_date')
+    .order('shift_start');
+  return (data ?? []).map(r => ({
+    date: r.shift_date as string,
+    csr: r.csr_key as string,
+    start: r.off ? '' : String(r.shift_start ?? '').slice(0, 5),
+    end: r.off ? '' : String(r.shift_end ?? '').slice(0, 5),
+    off: !!r.off || !r.shift_start || !r.shift_end,
+  }));
+}
+
+// One evaluated lead — everything the views need, computed once.
+export type LeadEval = {
+  client_id: string;
+  source_id: string;
+  name: string;
+  arrivedAt: string;           // ISO
+  day: string;                 // London yyyy-mm-dd
+  responsible: string;         // csr key accountable for this lead (see header)
+  cover: boolean;              // responsible ≠ the client's assigned setter
+  firstDialAt: string | null;
+  firstDialBy: string | null;  // display name of whoever dialled first
+  minsToDial: number | null;
+  attempted: boolean;          // dialled ≤30m
+  connected: boolean;          // completed ≥60s call ≤30m
+};
+
+type ClientAssign = { client_id: string; csr: string | null };
+
+// Evaluate every measurable new lead for the given clients in range.
+export async function evaluateLeads(clients: ClientAssign[], range: DateRange): Promise<LeadEval[]> {
+  const ids = clients.map(c => c.client_id).filter(Boolean);
+  if (ids.length === 0) return [];
+  const assigned = new Map(clients.map(c => [c.client_id, c.csr]));
+
+  const [contacts, calls, shifts] = await Promise.all([
+    pageAll<{ location_id: string; source_id: string; first_name: string | null; last_name: string | null; date_added: string | null; phone: string | null; tags: unknown }>((f, t) =>
+      supabase.from('ghl_contacts')
+        .select('location_id, source_id, first_name, last_name, date_added, phone, tags')
+        .in('location_id', ids)
+        .gte('date_added', `${range.since}T00:00:00Z`)
+        .lte('date_added', `${range.until}T23:59:59Z`)
+        .range(f, t)),
+    // No upper bound: a lead near the end of the range may be dialled after it.
+    pageAll<{ location_id: string; contact_source_id: string | null; user_name: string | null; user_id: string | null; call_at: string | null; status: string | null; duration_sec: number | null }>((f, t) =>
+      supabaseAdmin.from('csr_calls')
+        .select('location_id, contact_source_id, user_name, user_id, call_at, status, duration_sec')
+        .in('location_id', ids)
+        .eq('direction', 'outbound')
+        .gte('call_at', `${range.since}T00:00:00Z`)
+        .range(f, t)),
+    getShifts(range),
   ]);
 
-  const callsOnFile = calls?.length ?? 0;
-
-  // Earliest outbound ATTEMPT per contact (any status — the setter dialled), and the
-  // earliest CONNECTED call (completed and ≥60s, the same bar as a "conversation").
-  const firstCall = new Map<string, { at: string; csr: string }>();
+  // Earliest attempt + earliest connected call per contact.
+  const firstCall = new Map<string, { at: string; by: string }>();
   const firstConnected = new Map<string, string>();
-  for (const c of calls ?? []) {
+  for (const c of calls) {
     if (!c.contact_source_id || !c.call_at) continue;
     const prev = firstCall.get(c.contact_source_id);
-    if (!prev || c.call_at < prev.at) {
-      firstCall.set(c.contact_source_id, { at: c.call_at, csr: c.user_name || c.user_id || '(unknown)' });
-    }
+    if (!prev || c.call_at < prev.at) firstCall.set(c.contact_source_id, { at: c.call_at, by: c.user_name || c.user_id || '(unknown)' });
     if (c.status === 'completed' && (c.duration_sec ?? 0) >= CONVERSATION_MIN_SEC) {
       const pc = firstConnected.get(c.contact_source_id);
       if (!pc || c.call_at < pc) firstConnected.set(c.contact_source_id, c.call_at);
     }
   }
 
-  let leadsInHours = 0, contactedWithin = 0, connectedWithin = 0, neverCalled = 0;
-  const deltas: number[] = [];
-  const perCsr = new Map<string, CsrSpeedRow>();
+  // Shifts by day, on-shift ones only, earliest start first.
+  const byDay = new Map<string, Shift[]>();
+  for (const s of shifts) {
+    if (s.off) continue;
+    const l = byDay.get(s.date) ?? [];
+    l.push(s);
+    byDay.set(s.date, l);
+  }
+  for (const l of byDay.values()) l.sort((a, b) => a.start.localeCompare(b.start) || a.csr.localeCompare(b.csr));
 
-  for (const l of leads ?? []) {
-    if (!l.date_added) continue;
-    // No phone number → can't be a phone-response target, so it's not in the denominator.
-    if (!String((l as { phone?: string | null }).phone ?? '').trim()) continue;
-    // No campaign REF tag → not a new enquiry (manual add, import, reactivation list).
-    if (!hasRefTag((l as { tags?: unknown }).tags)) continue;
-    if (!onShift(l.date_added, coverage)) continue; // nobody on shift when it arrived
-    leadsInHours++;
+  const out: LeadEval[] = [];
+  for (const l of contacts) {
+    if (!l.date_added || !String(l.phone ?? '').trim() || !hasRefTag(l.tags)) continue;
+    const day = londonDate(l.date_added);
+    const t = londonClock(l.date_added);
+    const on = (byDay.get(day) ?? []).filter(s => t >= s.start && t < s.end);
+    if (on.length === 0) continue; // nobody on shift → not measured
 
     const fc = firstCall.get(l.source_id);
-    // Only calls *after* the enquiry count as a response to it. A never-phoned lead is a
-    // miss at the team level (it's in leadsInHours) but can't be credited to a person.
-    if (!fc || fc.at <= l.date_added) { neverCalled++; continue; }
+    const dial = fc && fc.at > l.date_added ? fc : null;
+    const dialBy = dial ? firstName(dial.by) : null;
 
-    const mins = (Date.parse(fc.at) - Date.parse(l.date_added)) / 60000;
-    deltas.push(mins);
-    const row = perCsr.get(fc.csr) ?? { csr: fc.csr, called: 0, within: 0, pct: null };
-    row.called++;
-    if (mins <= SPEED_TO_LEAD_MINUTES) { row.within++; contactedWithin++; }
-    perCsr.set(fc.csr, row);
+    const own = assigned.get(l.location_id) ?? null;
+    let responsible: string;
+    if (own && on.some(s => s.csr === own)) responsible = own;
+    else if (dialBy && on.some(s => s.csr === dialBy)) responsible = dialBy;
+    else responsible = on[0].csr;
 
+    const mins = dial ? (Date.parse(dial.at) - Date.parse(l.date_added)) / 60000 : null;
     const conn = firstConnected.get(l.source_id);
-    if (conn && conn > l.date_added && (Date.parse(conn) - Date.parse(l.date_added)) / 60000 <= SPEED_TO_LEAD_MINUTES) connectedWithin++;
+    out.push({
+      client_id: l.location_id,
+      source_id: l.source_id,
+      name: `${l.first_name ?? ''} ${l.last_name ?? ''}`.trim() || '(no name)',
+      arrivedAt: l.date_added,
+      day,
+      responsible,
+      cover: responsible !== own,
+      firstDialAt: dial?.at ?? null,
+      firstDialBy: dial?.by ?? null,
+      minsToDial: mins == null ? null : Math.round(mins),
+      attempted: mins != null && mins <= SPEED_TO_LEAD_MINUTES,
+      connected: !!conn && conn > l.date_added && (Date.parse(conn) - Date.parse(l.date_added)) / 60000 <= SPEED_TO_LEAD_MINUTES,
+    });
   }
+  return out.sort((a, b) => b.arrivedAt.localeCompare(a.arrivedAt));
+}
 
+// ─── Per-client summary (kept for the KPIs page + Call Tracking detail) ──────
+
+export type CsrSpeedRow = {
+  csr: string;         // display name of whoever dialled first
+  called: number;      // leads this CSR was the first to phone
+  within: number;      // ...within the 30-min target
+  pct: number | null;
+};
+
+export type SpeedToLead = {
+  leadsInHours: number;      // measured new leads (the denominator)
+  phoned: number;            // ...that got any outbound call
+  contactedWithin: number;   // ...dialled ≤30m (scored)
+  connectedWithin: number;   // ...connected ≤30m (outcome)
+  pct: number | null;
+  neverCalled: number;
+  medianMinutes: number | null;
+  perCsr: CsrSpeedRow[];
+  callsOnFile: number;       // rows in csr_calls for this client (0 ⇒ not synced yet)
+};
+
+export function summarise(leads: LeadEval[]): Omit<SpeedToLead, 'callsOnFile'> {
+  let phoned = 0, within = 0, connected = 0;
+  const deltas: number[] = [];
+  const perCsr = new Map<string, CsrSpeedRow>();
+  for (const l of leads) {
+    if (l.firstDialBy && l.minsToDial != null) {
+      phoned++;
+      deltas.push(l.minsToDial);
+      const row = perCsr.get(l.firstDialBy) ?? { csr: l.firstDialBy, called: 0, within: 0, pct: null };
+      row.called++;
+      if (l.attempted) row.within++;
+      perCsr.set(l.firstDialBy, row);
+    }
+    if (l.attempted) within++;
+    if (l.connected) connected++;
+  }
   for (const r of perCsr.values()) r.pct = r.called ? +((100 * r.within) / r.called).toFixed(1) : null;
   deltas.sort((a, b) => a - b);
-  const median = deltas.length ? deltas[Math.floor(deltas.length / 2)] : null;
-
-  // The rate is measured on ALL new leads in business hours — a lead never phoned is a
-  // miss (0), not an exclusion. `phoned` / `neverCalled` are kept for context/breakdown.
-  const phoned = leadsInHours - neverCalled;
   return {
-    leadsInHours,
+    leadsInHours: leads.length,
     phoned,
-    contactedWithin,
-    connectedWithin,
-    pct: leadsInHours ? +((100 * contactedWithin) / leadsInHours).toFixed(1) : null,
-    neverCalled,
-    medianMinutes: median == null ? null : Math.round(median),
+    contactedWithin: within,
+    connectedWithin: connected,
+    pct: leads.length ? +((100 * within) / leads.length).toFixed(1) : null,
+    neverCalled: leads.length - phoned,
+    medianMinutes: deltas.length ? deltas[Math.floor(deltas.length / 2)] : null,
     perCsr: [...perCsr.values()].sort((a, b) => b.called - a.called),
-    callsOnFile,
   };
 }
 
-// ─── Call Activity (setter productivity) ─────────────────────────────────────
-// Dials = outbound calls. Conversations = connected calls ≥60s. Plus per-setter rows
-// (with their Speed-to-Lead merged in) and a daily dials/conversations series.
+async function assignmentFor(clientId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin.from('clients').select('csr_key').eq('ghl_location_id', clientId).maybeSingle();
+  return (data as { csr_key?: string | null } | null)?.csr_key ?? null;
+}
 
-export type CsrActivityRow = {
-  csr: string;
-  dials: number;
-  conversations: number;
-  convRatePct: number | null;
-  avgDurationSec: number | null;
-  speedToLeadPct: number | null;
-  speedLeads: number;   // new leads this setter was the first to phone (arrived on shift)
-  speedWithin: number;  // ...of those, contacted within the 30-min target
-};
-export type DailyPoint = { date: string; dials: number; conversations: number };
-export type CallActivity = {
-  dials: number;
-  conversations: number;
-  convRatePct: number | null;
-  avgDurationSec: number | null;
-  setters: CsrActivityRow[];
-  daily: DailyPoint[];
-  callsOnFile: number;
-  speed: SpeedToLead;
-};
-
-// Lightweight top-line per client — for the overview grid, so we don't run the heavier
-// leads-join (Speed to Lead) across every client.
-export type CallSummary = {
-  clientId: string;
-  dials: number;
-  conversations: number;
-  convRatePct: number | null;
-  avgDurationSec: number | null;
-  callsOnFile: number;
-};
-
-export async function getCallSummary(clientId: string, range: DateRange): Promise<CallSummary> {
-  const empty: CallSummary = { clientId, dials: 0, conversations: 0, convRatePct: null, avgDurationSec: null, callsOnFile: 0 };
-  if (!clientId) return empty;
-  const [{ data: calls }, { count }] = await Promise.all([
-    supabaseAdmin
-      .from('csr_calls').select('duration_sec')
-      .eq('location_id', clientId).eq('direction', 'outbound')
-      .gte('call_at', `${range.since}T00:00:00Z`).lte('call_at', `${range.until}T23:59:59Z`),
+export async function getSpeedToLead(clientId: string, range: DateRange): Promise<SpeedToLead> {
+  if (!clientId) return { leadsInHours: 0, phoned: 0, contactedWithin: 0, connectedWithin: 0, pct: null, neverCalled: 0, medianMinutes: null, perCsr: [], callsOnFile: 0 };
+  const [csr, { count }] = await Promise.all([
+    assignmentFor(clientId),
     supabaseAdmin.from('csr_calls').select('*', { count: 'exact', head: true }).eq('location_id', clientId),
   ]);
-  let dials = 0, conv = 0, durSum = 0;
-  for (const c of calls ?? []) {
-    dials++;
-    if ((c.duration_sec ?? 0) >= CONVERSATION_MIN_SEC) { conv++; durSum += c.duration_sec ?? 0; }
-  }
-  return {
-    clientId, dials, conversations: conv,
-    convRatePct: dials ? +((100 * conv) / dials).toFixed(1) : null,
-    avgDurationSec: conv ? Math.round(durSum / conv) : null,
-    callsOnFile: count ?? 0,
-  };
+  const leads = await evaluateLeads([{ client_id: clientId, csr }], range);
+  return { ...summarise(leads), callsOnFile: count ?? 0 };
 }
 
-export async function getCallActivity(clientId: string, range: DateRange): Promise<CallActivity> {
-  const speed = await getSpeedToLead(clientId, range);
-  const base: CallActivity = {
-    dials: 0, conversations: 0, convRatePct: null, avgDurationSec: null,
-    setters: [], daily: [], callsOnFile: speed.callsOnFile, speed,
-  };
-  if (!clientId) return base;
+// Call Tracking detail: the summary plus the lead-by-lead log.
+export type ClientSpeed = SpeedToLead & { leads: LeadEval[]; assigned: string | null };
 
-  const { data: calls } = await supabaseAdmin
-    .from('csr_calls')
-    .select('user_name, user_id, duration_sec, call_at')
-    .eq('location_id', clientId)
-    .eq('direction', 'outbound')
-    .gte('call_at', `${range.since}T00:00:00Z`)
-    .lte('call_at', `${range.until}T23:59:59Z`);
+export async function getClientSpeed(clientId: string, range: DateRange): Promise<ClientSpeed> {
+  const [csr, { count }] = await Promise.all([
+    assignmentFor(clientId),
+    supabaseAdmin.from('csr_calls').select('*', { count: 'exact', head: true }).eq('location_id', clientId),
+  ]);
+  const leads = await evaluateLeads([{ client_id: clientId, csr }], range);
+  return { ...summarise(leads), callsOnFile: count ?? 0, leads, assigned: csr };
+}
 
-  const speedByCsr = new Map(speed.perCsr.map(r => [r.csr, r]));
-  const bySetter = new Map<string, { dials: number; conv: number; durSum: number }>();
-  const byDay = new Map<string, { dials: number; conv: number }>();
-  let dials = 0, conv = 0, durSum = 0;
+// ─── Call Tracking overview: one row per client ──────────────────────────────
 
-  for (const c of calls ?? []) {
-    const isConv = (c.duration_sec ?? 0) >= CONVERSATION_MIN_SEC;
-    dials++;
-    if (isConv) { conv++; durSum += c.duration_sec ?? 0; }
-    const csr = c.user_name || c.user_id || '(unknown)';
-    const s = bySetter.get(csr) ?? { dials: 0, conv: 0, durSum: 0 };
-    s.dials++; if (isConv) { s.conv++; s.durSum += c.duration_sec ?? 0; }
-    bySetter.set(csr, s);
-    if (c.call_at) {
-      const d = londonDate(c.call_at);
-      const dd = byDay.get(d) ?? { dials: 0, conv: 0 };
-      dd.dials++; if (isConv) dd.conv++;
-      byDay.set(d, dd);
-    }
+export type ClientSpeedRow = {
+  client_id: string;
+  csr: string | null;
+  leads: number;
+  attempted: number;
+  connected: number;
+  neverCalled: number;
+  pct: number | null;
+};
+
+export async function getClientSpeedRows(clients: ClientAssign[], range: DateRange): Promise<ClientSpeedRow[]> {
+  const leads = await evaluateLeads(clients, range);
+  const by = new Map<string, ClientSpeedRow>();
+  for (const c of clients) by.set(c.client_id, { client_id: c.client_id, csr: c.csr, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null });
+  for (const l of leads) {
+    const r = by.get(l.client_id);
+    if (!r) continue;
+    r.leads++;
+    if (l.attempted) r.attempted++;
+    if (l.connected) r.connected++;
+    if (!l.firstDialBy) r.neverCalled++;
   }
+  for (const r of by.values()) r.pct = r.leads ? +((100 * r.attempted) / r.leads).toFixed(1) : null;
+  return [...by.values()];
+}
 
-  const setters: CsrActivityRow[] = [...bySetter.entries()]
-    .map(([csr, s]) => {
-      const sp = speedByCsr.get(csr);
-      return {
-        csr, dials: s.dials, conversations: s.conv,
-        convRatePct: s.dials ? +((100 * s.conv) / s.dials).toFixed(1) : null,
-        avgDurationSec: s.conv ? Math.round(s.durSum / s.conv) : null,
-        speedToLeadPct: sp?.pct ?? null,
-        speedLeads: sp?.called ?? 0,
-        speedWithin: sp?.within ?? 0,
-      };
-    })
-    .sort((a, b) => b.dials - a.dials);
+// ─── Shifts scorecard: one row per setter per day ────────────────────────────
 
-  // Daily series across the range, gaps filled with zeros (capped so long ranges stay sane).
-  const daily: DailyPoint[] = [];
-  const start = Date.parse(`${range.since}T00:00:00Z`);
-  const end = Date.parse(`${range.until}T00:00:00Z`);
-  for (let t = start; t <= end && daily.length < 120; t += 86_400_000) {
-    const key = new Date(t).toISOString().slice(0, 10);
-    const v = byDay.get(key) ?? { dials: 0, conv: 0 };
-    daily.push({ date: key, dials: v.dials, conversations: v.conv });
+export type ShiftRow = {
+  date: string;
+  csr: string;
+  start: string;     // '' when off
+  end: string;
+  off: boolean;
+  leads: number;     // leads this setter was responsible for that day
+  attempted: number;
+  connected: number;
+  neverCalled: number;
+  pct: number | null;
+  coverLeads: number; // ...of which came from covering someone else's client
+};
+
+export type ShiftScorecard = {
+  days: { date: string; rows: ShiftRow[] }[];   // newest first
+  setters: { csr: string; shifts: number; leads: number; attempted: number; connected: number; neverCalled: number; pct: number | null }[];
+};
+
+export async function getShiftScorecard(clients: ClientAssign[], range: DateRange): Promise<ShiftScorecard> {
+  const [shifts, leads] = await Promise.all([getShifts(range), evaluateLeads(clients, range)]);
+
+  const rows = new Map<string, ShiftRow>(); // `${date}|${csr}`
+  for (const s of shifts) {
+    rows.set(`${s.date}|${s.csr}`, { date: s.date, csr: s.csr, start: s.start, end: s.end, off: s.off, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null, coverLeads: 0 });
   }
+  for (const l of leads) {
+    const r = rows.get(`${l.day}|${l.responsible}`);
+    if (!r) continue;
+    r.leads++;
+    if (l.attempted) r.attempted++;
+    if (l.connected) r.connected++;
+    if (!l.firstDialBy) r.neverCalled++;
+    if (l.cover) r.coverLeads++;
+  }
+  for (const r of rows.values()) r.pct = r.leads ? +((100 * r.attempted) / r.leads).toFixed(1) : null;
 
-  return {
-    dials,
-    conversations: conv,
-    convRatePct: dials ? +((100 * conv) / dials).toFixed(1) : null,
-    avgDurationSec: conv ? Math.round(durSum / conv) : null,
-    setters, daily, callsOnFile: speed.callsOnFile, speed,
-  };
+  const byDate = new Map<string, ShiftRow[]>();
+  for (const r of rows.values()) {
+    const l = byDate.get(r.date) ?? [];
+    l.push(r);
+    byDate.set(r.date, l);
+  }
+  const days = [...byDate.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([date, list]) => ({ date, rows: list.sort((a, b) => Number(a.off) - Number(b.off) || a.start.localeCompare(b.start) || a.csr.localeCompare(b.csr)) }));
+
+  const setters = new Map<string, ShiftScorecard['setters'][number]>();
+  for (const r of rows.values()) {
+    const s = setters.get(r.csr) ?? { csr: r.csr, shifts: 0, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null };
+    if (!r.off) s.shifts++;
+    s.leads += r.leads; s.attempted += r.attempted; s.connected += r.connected; s.neverCalled += r.neverCalled;
+    setters.set(r.csr, s);
+  }
+  for (const s of setters.values()) s.pct = s.leads ? +((100 * s.attempted) / s.leads).toFixed(1) : null;
+
+  return { days, setters: [...setters.values()].sort((a, b) => b.leads - a.leads) };
 }
