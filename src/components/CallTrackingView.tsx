@@ -103,7 +103,7 @@ function OutcomeBar({ leads, attempted, neverCalled, connected, className }: { l
   ];
   const tip = leads === 0 ? 'No leads' : `${leads} leads · ${seg.map(x => `${x.n} ${x.label}`).join(' · ')}${connected != null ? ` · ${connected} connected` : ''}`;
   return (
-    <Tooltip label={tip} className={cn('block w-full', className)}>
+    <Tooltip label={tip} always className={cn('block w-full cursor-default', className)}>
       <div className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full bg-surface-2">
         {leads > 0 && seg.filter(x => x.n > 0).map(x => (
           <div key={x.label} className={cn('h-full rounded-full', x.cls)} style={{ width: `${(x.n / leads) * 100}%` }} />
@@ -528,7 +528,7 @@ function ShiftCell({ r, active, onClick }: { r: ShiftRow | null; active: boolean
     : 'bg-red/80';
   return (
     <td>
-      <Tooltip label={label}>
+      <Tooltip label={label} always>
         <button onClick={onClick} disabled={r.off}
           className={cn('flex h-7 w-7 items-center justify-center rounded-md text-[9px] font-semibold tabular-nums transition-transform', cls, !r.off && 'hover:scale-110', active && 'ring-2 ring-pink ring-offset-1 ring-offset-surface', r.off ? 'text-fg-dim' : r.leads === 0 ? 'text-fg-dim' : 'text-black')}>
           {r.off ? <Moon size={10} /> : r.leads > 0 ? r.leads : ''}

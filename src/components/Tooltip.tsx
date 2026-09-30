@@ -6,21 +6,26 @@ import { cn } from '@/lib/utils';
 // Wraps a single line of text with `truncate`. On hover it shows the full value in
 // a small popup — but only when the text is actually clipped. Uses fixed
 // positioning so it's never cut off by a parent's overflow (tables, sidebar list).
+// `always` skips the clipped check, for non-text children (bars, cells) that should
+// explain themselves on hover.
 export function Tooltip({
   label,
   children,
   className,
+  always = false,
 }: {
   label: string;
   children: ReactNode;
   className?: string;
+  always?: boolean;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
 
   const show = () => {
     const el = ref.current;
-    if (!el || el.scrollWidth <= el.clientWidth) return; // not truncated → no popup
+    if (!el) return;
+    if (!always && el.scrollWidth <= el.clientWidth) return; // not truncated → no popup
     const r = el.getBoundingClientRect();
     const x = Math.min(Math.max(r.left + r.width / 2, 80), window.innerWidth - 80);
     setPos({ x, y: r.bottom + 6 });
@@ -29,7 +34,7 @@ export function Tooltip({
 
   return (
     <>
-      <span ref={ref} onMouseEnter={show} onMouseLeave={hide} className={cn('block truncate', className)}>
+      <span ref={ref} onMouseEnter={show} onMouseLeave={hide} className={cn('block', !always && 'truncate', className)}>
         {children}
       </span>
       {pos && (
