@@ -13,6 +13,9 @@ import { SPEED_TO_LEAD_MINUTES, hasRefTag } from './csrConstants';
 //                 the client's assigned setter (clients.csr_key), or — when they're off —
 //                 whoever else was on shift (cover). A day with no shift rows, or a lead
 //                 arriving when nobody's on, isn't measured at all.
+//   SELF-BOOKED — a lead that paid a deposit before anyone dialled (or was never dialled
+//                 and paid anyway) didn't need a call, so it's left out of the measure.
+//                 A lead that paid AFTER a call stays in — that's the KPI working.
 //   ATTEMPTED   — an outbound dial within 30 min, answered or not. This is the scored KPI:
 //                 a setter can't make a lead pick up. A lead nobody phoned is a MISS.
 //   CONNECTED   — a completed outbound call of ≥60s within 30 min (the same bar as a
@@ -79,6 +82,8 @@ export type LeadEval = {
   minsToDial: number | null;
   attempted: boolean;          // dialled ≤30m
   connected: boolean;          // completed ≥60s call ≤30m
+  paidAt: string | null;       // first succeeded deposit, if any
+  selfBooked: boolean;         // paid before any dial → not measured
 };
 
 type ClientAssign = { client_id: string; csr: string | null };
@@ -89,7 +94,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
   if (ids.length === 0) return [];
   const assigned = new Map(clients.map(c => [c.client_id, c.csr]));
 
-  const [contacts, calls, shifts] = await Promise.all([
+  const [contacts, calls, shifts, txns] = await Promise.all([
     pageAll<{ location_id: string; source_id: string; first_name: string | null; last_name: string | null; date_added: string | null; phone: string | null; tags: unknown }>((f, t) =>
       supabase.from('ghl_contacts')
         .select('location_id, source_id, first_name, last_name, date_added, phone, tags')
@@ -106,7 +111,22 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
         .gte('call_at', `${range.since}T00:00:00Z`)
         .range(f, t)),
     getShifts(range),
+    pageAll<{ contact_source_id: string | null; charge_created_at: string | null }>((f, t) =>
+      supabase.from('ghl_transactions')
+        .select('contact_source_id, charge_created_at')
+        .in('location_id', ids)
+        .eq('status', 'succeeded')
+        .gte('charge_created_at', `${range.since}T00:00:00Z`)
+        .range(f, t)),
   ]);
+
+  // Earliest succeeded deposit per contact.
+  const firstPaid = new Map<string, string>();
+  for (const t of txns) {
+    if (!t.contact_source_id || !t.charge_created_at) continue;
+    const prev = firstPaid.get(t.contact_source_id);
+    if (!prev || t.charge_created_at < prev) firstPaid.set(t.contact_source_id, t.charge_created_at);
+  }
 
   // Earliest attempt + earliest connected call per contact.
   const firstCall = new Map<string, { at: string; by: string }>();
@@ -151,6 +171,8 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
 
     const mins = dial ? (Date.parse(dial.at) - Date.parse(l.date_added)) / 60000 : null;
     const conn = firstConnected.get(l.source_id);
+    const paidAt = firstPaid.get(l.source_id) ?? null;
+    const selfBooked = !!paidAt && paidAt > l.date_added && (!dial || paidAt < dial.at);
     out.push({
       client_id: l.location_id,
       source_id: l.source_id,
@@ -164,6 +186,8 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
       minsToDial: mins == null ? null : Math.round(mins),
       attempted: mins != null && mins <= SPEED_TO_LEAD_MINUTES,
       connected: !!conn && conn > l.date_added && (Date.parse(conn) - Date.parse(l.date_added)) / 60000 <= SPEED_TO_LEAD_MINUTES,
+      paidAt,
+      selfBooked,
     });
   }
   return out.sort((a, b) => b.arrivedAt.localeCompare(a.arrivedAt));
@@ -185,12 +209,15 @@ export type SpeedToLead = {
   connectedWithin: number;   // ...connected ≤30m (outcome)
   pct: number | null;
   neverCalled: number;
+  selfBooked: number;        // paid a deposit before any call — left out of the measure
   medianMinutes: number | null;
   perCsr: CsrSpeedRow[];
   callsOnFile: number;       // rows in csr_calls for this client (0 ⇒ not synced yet)
 };
 
-export function summarise(leads: LeadEval[]): Omit<SpeedToLead, 'callsOnFile'> {
+export function summarise(all: LeadEval[]): Omit<SpeedToLead, 'callsOnFile'> {
+  const selfBooked = all.filter(l => l.selfBooked).length;
+  const leads = all.filter(l => !l.selfBooked);
   let phoned = 0, within = 0, connected = 0;
   const deltas: number[] = [];
   const perCsr = new Map<string, CsrSpeedRow>();
@@ -215,6 +242,7 @@ export function summarise(leads: LeadEval[]): Omit<SpeedToLead, 'callsOnFile'> {
     connectedWithin: connected,
     pct: leads.length ? +((100 * within) / leads.length).toFixed(1) : null,
     neverCalled: leads.length - phoned,
+    selfBooked,
     medianMinutes: deltas.length ? deltas[Math.floor(deltas.length / 2)] : null,
     perCsr: [...perCsr.values()].sort((a, b) => b.called - a.called),
   };
@@ -226,7 +254,7 @@ async function assignmentFor(clientId: string): Promise<string | null> {
 }
 
 export async function getSpeedToLead(clientId: string, range: DateRange): Promise<SpeedToLead> {
-  if (!clientId) return { leadsInHours: 0, phoned: 0, contactedWithin: 0, connectedWithin: 0, pct: null, neverCalled: 0, medianMinutes: null, perCsr: [], callsOnFile: 0 };
+  if (!clientId) return { leadsInHours: 0, phoned: 0, contactedWithin: 0, connectedWithin: 0, pct: null, neverCalled: 0, selfBooked: 0, medianMinutes: null, perCsr: [], callsOnFile: 0 };
   const [csr, { count }] = await Promise.all([
     assignmentFor(clientId),
     supabaseAdmin.from('csr_calls').select('*', { count: 'exact', head: true }).eq('location_id', clientId),
@@ -256,16 +284,18 @@ export type ClientSpeedRow = {
   attempted: number;
   connected: number;
   neverCalled: number;
+  selfBooked: number;
   pct: number | null;
 };
 
 export async function getClientSpeedRows(clients: ClientAssign[], range: DateRange): Promise<ClientSpeedRow[]> {
   const leads = await evaluateLeads(clients, range);
   const by = new Map<string, ClientSpeedRow>();
-  for (const c of clients) by.set(c.client_id, { client_id: c.client_id, csr: c.csr, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null });
+  for (const c of clients) by.set(c.client_id, { client_id: c.client_id, csr: c.csr, leads: 0, attempted: 0, connected: 0, neverCalled: 0, selfBooked: 0, pct: null });
   for (const l of leads) {
     const r = by.get(l.client_id);
     if (!r) continue;
+    if (l.selfBooked) { r.selfBooked++; continue; }
     r.leads++;
     if (l.attempted) r.attempted++;
     if (l.connected) r.connected++;
@@ -304,6 +334,7 @@ export async function getShiftScorecard(clients: ClientAssign[], range: DateRang
     rows.set(`${s.date}|${s.csr}`, { date: s.date, csr: s.csr, start: s.start, end: s.end, off: s.off, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null, coverLeads: 0 });
   }
   for (const l of leads) {
+    if (l.selfBooked) continue;
     const r = rows.get(`${l.day}|${l.responsible}`);
     if (!r) continue;
     r.leads++;
