@@ -3,6 +3,12 @@
 
 export const SPEED_TO_LEAD_MINUTES = 30;
 
+// Speed to Lead tier thresholds (%). 'flat' is the standard a setter is expected to hit;
+// 'junior' is the floor below which it's under target; 'senior' is exceeding it.
+// One place to change — every view, tooltip, legend and attention strip reads these.
+export const SPEED_TIERS = { junior: 65, flat: 70, senior: 75 } as const;
+export const SPEED_TIER_TEXT = `Targets: Junior ${SPEED_TIERS.junior}% · Flat ${SPEED_TIERS.flat}% · Senior ${SPEED_TIERS.senior}%.`;
+
 // A contact only counts as a NEW LEAD for Speed to Lead if it carries a campaign REF tag,
 // e.g. "dlc-ec-01-aug26" — <client>-<offer>-<nn>-<monYY>. That's what every ad / funnel
 // enquiry gets on the way in. Untagged contacts (manual adds, imports) and campaign tags

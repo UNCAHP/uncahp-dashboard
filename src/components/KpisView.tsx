@@ -6,7 +6,7 @@ import { Headphones, Megaphone, FlaskConical, Target, ChevronRight, Phone, Messa
 import type { CsrKpiRow, CsrDayRow, CsrSpeedRow } from '@/lib/kpis';
 import { InfoTip } from '@/components/InfoTip';
 import { SyncBadge } from '@/components/FreshnessBadge';
-import { BOOKINGS_KPIS_ENABLED, SPEED_TO_LEAD_MINUTES } from '@/lib/csrConstants';
+import { BOOKINGS_KPIS_ENABLED, SPEED_TO_LEAD_MINUTES, SPEED_TIERS, SPEED_TIER_TEXT } from '@/lib/csrConstants';
 import { cn } from '@/lib/utils';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -22,7 +22,7 @@ const midCls = 'bg-yellow/15 text-yellow';
 const topCls = 'bg-green/15 text-green';
 const confirmedTier = (n: number): Tier => (n >= 110 ? { label: 'Senior', cls: topCls } : n >= 90 ? { label: 'Flat', cls: topCls } : n >= 60 ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
 const phoneTier = (p: number): Tier => (p >= 75 ? { label: 'Senior', cls: topCls } : p >= 65 ? { label: 'Flat', cls: topCls } : p >= 60 ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
-const speedTier = (p: number): Tier => (p >= 85 ? { label: 'Senior', cls: topCls } : p >= 80 ? { label: 'Flat', cls: topCls } : p >= 75 ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
+const speedTier = (p: number): Tier => (p >= SPEED_TIERS.senior ? { label: 'Senior', cls: topCls } : p >= SPEED_TIERS.flat ? { label: 'Flat', cls: topCls } : p >= SPEED_TIERS.junior ? { label: 'Junior', cls: midCls } : { label: 'Below', cls: belowCls });
 
 export function KpisView({ rows, months, month, daily, syncAgeHours, speed }: {
   rows: CsrKpiRow[];
@@ -71,7 +71,7 @@ export function KpisView({ rows, months, month, daily, syncAgeHours, speed }: {
                 <th className="px-3 py-2.5 text-left font-semibold">Setter</th>
                 <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Confirmed bookings <InfoTip text={BOOKINGS_KPIS_ENABLED ? "The setter's booking total for the month, from their tab in the Appointment Setting Tracker sheet (synced daily). Targets: Junior 60 · Flat 90 · Senior 110." : 'Paused — not currently being tracked. Targets when live: Junior 60 · Flat 90 · Senior 110.'} /></span></th>
                 <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Phone booking ratio <InfoTip text={BOOKINGS_KPIS_ENABLED ? 'CALL ÷ (CALL + SMS) bookings from the same sheet tab. Targets: Junior 60% · Flat 65% · Senior 75%.' : 'Paused — not currently being tracked. Targets when live: Junior 60% · Flat 65% · Senior 75%.'} /></span></th>
-                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text={`Of every new lead on this setter's assigned clients that arrived during their shift, the % with an outbound dial within ${SPEED_TO_LEAD_MINUTES} min (answered or not). A lead nobody phoned counts as a miss. Cover from another setter counts when they're off. Targets: Junior 75% · Flat 80% · Senior 85%.`} /></span></th>
+                <th className="px-3 py-2.5 text-left font-semibold"><span className="inline-flex items-center gap-1">Speed to Lead <InfoTip text={`Of every new lead on this setter's assigned clients that arrived during their shift, the % with an outbound dial within ${SPEED_TO_LEAD_MINUTES} min (answered or not). A lead nobody phoned counts as a miss. Cover from another setter counts when they're off. ${SPEED_TIER_TEXT}`} /></span></th>
               </tr>
             </thead>
             <tbody>
@@ -238,7 +238,7 @@ function SpeedBySetter({ rows, month }: { rows: CsrSpeedRow[]; month: string | n
   if (rows.length === 0) {
     return <div className="px-3 py-10 text-center text-sm text-fg-dim">No leads on shift in {fmtMonth(month)}.</div>;
   }
-  const pctText = (p: number | null) => (p == null ? 'text-fg-dim' : p >= 80 ? 'text-green' : p >= 75 ? 'text-yellow' : 'text-red');
+  const pctText = (p: number | null) => (p == null ? 'text-fg-dim' : p >= SPEED_TIERS.flat ? 'text-green' : p >= SPEED_TIERS.junior ? 'text-yellow' : 'text-red');
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
