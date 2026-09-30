@@ -30,6 +30,13 @@ export const CSR_SETTERS: { key: string; label: string }[] = [
   { key: 'maddie', label: 'Maddie' },
 ];
 
+// Setters whose Speed to Lead is NOT tracked (lowercased first name). Their assigned
+// clients drop out of the measure, their shifts don't appear on the Shifts tab, and leads
+// they'd be responsible for while covering aren't counted. Bookings KPIs are unaffected.
+export const UNTRACKED_SETTERS: string[] = ['cathy'];
+export const isTrackedSetter = (key: string | null | undefined): boolean =>
+  !!key && !UNTRACKED_SETTERS.includes(key.toLowerCase());
+
 // Which clients Speed to Lead is measured for: B2C clients with a dedicated setter.
 // Self-booking clients (no csr_key) book themselves, so a phone-response KPI doesn't
 // apply. Before migration 0019 has run nobody has a csr_key yet — in that case keep
@@ -37,5 +44,7 @@ export const CSR_SETTERS: { key: string; label: string }[] = [
 export function setterClients<T extends { segment?: 'b2c' | 'b2b'; csr_key?: string | null }>(clients: T[]): T[] {
   const b2c = clients.filter(c => c.segment !== 'b2b');
   const assigned = b2c.filter(c => !!c.csr_key);
-  return assigned.length ? assigned : b2c;
+  if (assigned.length === 0) return b2c;
+  // Clients whose setter isn't tracked for Speed to Lead aren't measured either.
+  return assigned.filter(c => isTrackedSetter(c.csr_key));
 }

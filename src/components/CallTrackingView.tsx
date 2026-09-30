@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
 import type { ClientSpeed, ClientSpeedRow, ShiftScorecard, ShiftRow, LeadEval } from '@/lib/csrMetrics';
-import { SPEED_TO_LEAD_MINUTES, CSR_SETTERS, SPEED_TARGET_PCT, SPEED_TARGET_TEXT } from '@/lib/csrConstants';
+import { SPEED_TO_LEAD_MINUTES, CSR_SETTERS, SPEED_TARGET_PCT, SPEED_TARGET_TEXT, isTrackedSetter } from '@/lib/csrConstants';
 import { syncClientCallsAction } from '@/app/actions/sync';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { InfoTip } from '@/components/InfoTip';
@@ -185,7 +185,7 @@ function Overview({ overview, onOpen }: { overview: CallOverviewRow[]; onOpen: (
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-fg-muted">
-          <Users size={13} className="text-pink" /> By client <InfoTip text="Only B2C clients with an assigned setter are measured. Self-booking clients book themselves, so a phone-response KPI doesn't apply. Hover a bar for the exact counts." />
+          <Users size={13} className="text-pink" /> By client <InfoTip text="Only B2C clients with an assigned, tracked setter are measured. Self-booking clients book themselves, so a phone-response KPI doesn't apply. Hover a bar for the exact counts." />
         </div>
         <BarLegend />
         <div className="relative w-full max-w-xs">
@@ -272,7 +272,7 @@ function Detail({ row }: { row: CallDetail }) {
           <Badge c={client} big />
           <div>
             <h2 className="text-2xl font-bold tracking-tight text-fg">{client.client_name}</h2>
-            <p className="text-xs text-fg-muted">Assigned setter · <span className="text-fg">{setterLabel(s.assigned)}</span></p>
+            <p className="text-xs text-fg-muted">Assigned setter · <span className="text-fg">{setterLabel(s.assigned)}</span>{s.assigned && !isTrackedSetter(s.assigned) && <span className="ml-1.5 rounded bg-border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-fg-dim">Speed to Lead not tracked</span>}</p>
           </div>
         </div>
         <button onClick={sync} disabled={pending}

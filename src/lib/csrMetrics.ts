@@ -1,6 +1,6 @@
 import { supabase, supabaseAdmin } from './supabase';
 import type { DateRange } from './queries';
-import { SPEED_TO_LEAD_MINUTES, hasRefTag } from './csrConstants';
+import { SPEED_TO_LEAD_MINUTES, hasRefTag, isTrackedSetter } from './csrConstants';
 
 // ─── Speed to Lead ───────────────────────────────────────────────────────────
 // "% of new leads with an outbound dial within 30 min of enquiry, during setter shifts".
@@ -142,10 +142,11 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
     }
   }
 
-  // Shifts by day, on-shift ones only, earliest start first.
+  // Shifts by day, on-shift ones only, earliest start first. Setters who aren't tracked
+  // for Speed to Lead can't be responsible for a lead, so their shifts don't count here.
   const byDay = new Map<string, Shift[]>();
   for (const s of shifts) {
-    if (s.off) continue;
+    if (s.off || !isTrackedSetter(s.csr)) continue;
     const l = byDay.get(s.date) ?? [];
     l.push(s);
     byDay.set(s.date, l);
@@ -334,6 +335,7 @@ export async function getShiftScorecard(clients: ClientAssign[], range: DateRang
 
   const rows = new Map<string, ShiftRow>(); // `${date}|${csr}`
   for (const s of shifts) {
+    if (!isTrackedSetter(s.csr)) continue;
     rows.set(`${s.date}|${s.csr}`, { date: s.date, csr: s.csr, start: s.start, end: s.end, off: s.off, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null, coverLeads: 0 });
   }
   for (const l of leads) {

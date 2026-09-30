@@ -6,7 +6,7 @@ import { Headphones, Megaphone, FlaskConical, Target, ChevronRight, Phone, Messa
 import type { CsrKpiRow, CsrDayRow, CsrSpeedRow } from '@/lib/kpis';
 import { InfoTip } from '@/components/InfoTip';
 import { SyncBadge } from '@/components/FreshnessBadge';
-import { BOOKINGS_KPIS_ENABLED, SPEED_TO_LEAD_MINUTES, SPEED_TARGET_PCT, SPEED_TARGET_TEXT } from '@/lib/csrConstants';
+import { BOOKINGS_KPIS_ENABLED, SPEED_TO_LEAD_MINUTES, SPEED_TARGET_PCT, SPEED_TARGET_TEXT, isTrackedSetter } from '@/lib/csrConstants';
 import { cn } from '@/lib/utils';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -115,9 +115,9 @@ export function KpisView({ rows, months, month, daily, syncAgeHours, speed }: {
                     tier={!BOOKINGS_KPIS_ENABLED || r.phonePct == null ? null : phoneTier(r.phonePct)}
                   />
                   <KpiCell
-                    value={r.speedPct == null ? '—' : `${r.speedPct}%`}
-                    sub={r.speedLeads > 0 ? `${r.speedWithin}/${r.speedLeads} leads on shift` : 'no leads on shift'}
-                    tier={r.speedPct == null ? null : speedTier(r.speedPct)}
+                    value={!isTrackedSetter(r.csr) || r.speedPct == null ? '—' : `${r.speedPct}%`}
+                    sub={!isTrackedSetter(r.csr) ? 'not tracked' : r.speedLeads > 0 ? `${r.speedWithin}/${r.speedLeads} leads on shift` : 'no leads on shift'}
+                    tier={!isTrackedSetter(r.csr) || r.speedPct == null ? null : speedTier(r.speedPct)}
                   />
                 </tr>
                 {isOpen && (
