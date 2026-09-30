@@ -42,7 +42,6 @@ export function SplitTestPanel({ test, baseUrl }: { test: SplitTest; baseUrl: st
                 key={v.key}
                 v={v}
                 funnelId={test.funnelId}
-                primaryMetric={test.primaryMetric}
                 isWinner={test.callable && v.key === test.leaderKey}
                 isLeader={!test.callable && v.key === test.leaderKey && !!test.runnerUpKey}
                 recommended={!!test.leaderKey && v.key === test.leaderKey}
@@ -75,7 +74,6 @@ export function SplitTestPanel({ test, baseUrl }: { test: SplitTest; baseUrl: st
 
 // After a winner is called: the funnel collapses back to a single flow for the winning version.
 function DecidedFlow({ test, winner, primaryLabel }: { test: SplitTest; winner: VariantStat; primaryLabel: string }) {
-  const heroRate = test.primaryMetric === 'deposit' ? winner.depositRate : winner.optinRate;
   return (
     <div>
       <div className="rounded-xl border border-green/40 bg-green/10 p-4">
@@ -92,13 +90,8 @@ function DecidedFlow({ test, winner, primaryLabel }: { test: SplitTest; winner: 
       </div>
 
       <div className="mt-4 rounded-xl border border-green/50 bg-green/5 p-4">
-        <div className="flex items-baseline gap-1.5">
-          <span className="font-mono text-3xl font-bold tabular-nums text-green">{heroRate != null ? formatPercent(heroRate * 100, 1) : '—'}</span>
-          <span className="text-[11px] text-fg-dim">{primaryLabel} rate · {winner.label}</span>
-        </div>
-        <div className="mt-4">
-          <StageFlow stages={variantStages(winner)} accent="green" compact />
-        </div>
+        <div className="mb-3 text-sm font-semibold text-fg">{winner.label}</div>
+        <StageFlow stages={variantStages(winner)} accent="green" compact />
       </div>
     </div>
   );
@@ -218,9 +211,9 @@ function ConfidenceMeter({ pct, tone }: { pct: number | null; tone: Tone }) {
 
 // One version: the primary-metric rate as the hero, then the raw funnel counts —
 // views → opt-ins → deposits — with each stage's conversion rate beneath it.
-function VersionColumn({ v, funnelId, primaryMetric, isWinner, isLeader, recommended }: { v: VariantStat; funnelId: string; primaryMetric: 'deposit' | 'optin'; isWinner: boolean; isLeader: boolean; recommended: boolean }) {
-  const heroRate = primaryMetric === 'deposit' ? v.depositRate : v.optinRate;
-  const heroLabel = primaryMetric === 'deposit' ? 'deposit rate' : 'opt-in rate';
+// The version's rates already show on the flow itself (connectors + captions), so the
+// header carries only the name, its status and the call-it button.
+function VersionColumn({ v, funnelId, isWinner, isLeader, recommended }: { v: VariantStat; funnelId: string; isWinner: boolean; isLeader: boolean; recommended: boolean }) {
   return (
     <div className={cn('rounded-xl border p-4', isWinner ? 'border-green/50 bg-green/5' : 'border-border bg-bg')}>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -232,15 +225,7 @@ function VersionColumn({ v, funnelId, primaryMetric, isWinner, isLeader, recomme
             <span className="rounded-full bg-border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-fg-dim">Leading</span>
           ) : null}
         </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-baseline gap-1.5">
-            <span className={cn('font-mono text-2xl font-bold tabular-nums', isWinner ? 'text-green' : 'text-fg')}>
-              {heroRate != null ? formatPercent(heroRate * 100, 1) : '—'}
-            </span>
-            <span className="text-[11px] text-fg-dim">{heroLabel}</span>
-          </div>
-          <DeclareButton funnelId={funnelId} variantKey={v.key} variantLabel={v.label} recommended={recommended} />
-        </div>
+        <DeclareButton funnelId={funnelId} variantKey={v.key} variantLabel={v.label} recommended={recommended} />
       </div>
 
       <div className="mt-4">
