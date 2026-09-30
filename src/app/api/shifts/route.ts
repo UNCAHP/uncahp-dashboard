@@ -12,7 +12,8 @@ import { supabaseAdmin } from '@/lib/supabase';
 //     { "date": "2026-09-28", "csr_name": "Alexis", "off": true }
 //
 // Times are London local. Accepted forms: "8", "8:30", "8.30", "08:30", "6pm", "6:30pm".
-// An end hour ≤ 12 with no am/pm is read as afternoon ("8-6" ⇒ 08:00–18:00).
+// An end hour ≤ 12 with no am/pm is read as afternoon ("8-6" ⇒ 08:00–18:00), and a start
+// hour of 1–6 with no am/pm too ("1-7pm" ⇒ 13:00–19:00 — nobody starts at 1am).
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +32,7 @@ function parseTime(raw: unknown, assumePm: boolean): string | null {
   if (ap === 'pm' && h < 12) h += 12;
   else if (ap === 'am' && h === 12) h = 0;
   else if (!ap && assumePm && h <= 12 && h !== 12) h += 12;
+  else if (!ap && !assumePm && h >= 1 && h <= 6) h += 12;
   return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
 }
 
