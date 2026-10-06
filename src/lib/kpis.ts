@@ -1,6 +1,6 @@
 import { supabaseAdmin } from './supabase';
 import { getActiveClients, type DateRange } from './queries';
-import { getSpeedToLead } from './csrMetrics';
+import { evaluateLeads } from './csrMetrics';
 import { setterClients, BOOKINGS_KPIS_ENABLED } from './csrConstants';
 
 // Consolidated, per-person team KPIs (the KPIs page). Aggregated ACROSS all clients —
@@ -60,30 +60,35 @@ export type CsrSpeedRow = {
 export async function getCsrSpeedToLead(month: string | null): Promise<CsrSpeedRow[]> {
   if (!month) return [];
   const range = monthRange(month);
-  const clients = setterClients(await getActiveClients()).filter(c => !!c.csr_key);
-  const speeds = await Promise.all(clients.map(c => getSpeedToLead(c.client_id, range)));
+  const clients = setterClients(await getActiveClients());
+  const nameOf = new Map(clients.map(c => [c.client_id, c.client_name]));
+  // Group by the setter RESPONSIBLE for each lead (assigned if on shift, else cover) —
+  // the same rule as Call Tracking's Shifts tab and the /api/speed-to-lead read-out, so
+  // every surface agrees. Self-booked leads are left out.
+  const leads = (await evaluateLeads(clients.map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null })), range)).filter(l => !l.selfBooked);
 
-  const by = new Map<string, CsrSpeedRow>();
-  clients.forEach((c, i) => {
-    const key = c.csr_key as string;
-    const s = speeds[i];
-    const row = by.get(key) ?? { csr: key.charAt(0).toUpperCase() + key.slice(1), key, leads: 0, within: 0, connected: 0, neverCalled: 0, pct: null, clients: [] };
-    row.leads += s.leadsInHours;
-    row.within += s.contactedWithin;
-    row.connected += s.connectedWithin;
-    row.neverCalled += s.neverCalled;
-    row.clients.push({
-      client_id: c.client_id, client_name: c.client_name,
-      leads: s.leadsInHours, within: s.contactedWithin, connected: s.connectedWithin, neverCalled: s.neverCalled,
-      pct: s.leadsInHours ? +((100 * s.contactedWithin) / s.leadsInHours).toFixed(1) : null,
-    });
+  const by = new Map<string, CsrSpeedRow & { _clients: Map<string, CsrSpeedClientRow> }>();
+  for (const l of leads) {
+    const key = l.responsible;
+    const row = by.get(key) ?? { csr: key.charAt(0).toUpperCase() + key.slice(1), key, leads: 0, within: 0, connected: 0, neverCalled: 0, pct: null, clients: [], _clients: new Map() };
+    row.leads++;
+    if (l.attempted) row.within++;
+    if (l.connected) row.connected++;
+    if (!l.firstDialBy) row.neverCalled++;
+    const c = row._clients.get(l.client_id) ?? { client_id: l.client_id, client_name: nameOf.get(l.client_id) ?? l.client_id, leads: 0, within: 0, connected: 0, neverCalled: 0, pct: null };
+    c.leads++;
+    if (l.attempted) c.within++;
+    if (l.connected) c.connected++;
+    if (!l.firstDialBy) c.neverCalled++;
+    row._clients.set(l.client_id, c);
     by.set(key, row);
-  });
-  for (const r of by.values()) {
-    r.pct = r.leads ? +((100 * r.within) / r.leads).toFixed(1) : null;
-    r.clients.sort((a, b) => b.leads - a.leads);
   }
-  return [...by.values()].sort((a, b) => b.leads - a.leads);
+  return [...by.values()].map(r => {
+    const clients = [...r._clients.values()].map(c => ({ ...c, pct: c.leads ? +((100 * c.within) / c.leads).toFixed(1) : null })).sort((a, b) => b.leads - a.leads);
+    const { _clients, ...rest } = r;
+    void _clients;
+    return { ...rest, pct: r.leads ? +((100 * r.within) / r.leads).toFixed(1) : null, clients };
+  }).sort((a, b) => b.leads - a.leads);
 }
 
 const firstKey = (s: string | null | undefined): string =>
