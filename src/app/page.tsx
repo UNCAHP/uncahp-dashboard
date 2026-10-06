@@ -38,10 +38,12 @@ import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// 31-day window ending on `until` (inclusive) → its first day, yyyy-mm-dd.
-function shiftWindowStart(until: string): string {
-  const [y, m, d] = until.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d - 30)).toISOString().slice(0, 10);
+// The calendar month containing `until`: its first and last day, yyyy-mm-dd.
+function calendarMonth(until: string): { since: string; until: string } {
+  const [y, m] = until.split('-').map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const mm = String(m).padStart(2, '0');
+  return { since: `${y}-${mm}-01`, until: `${y}-${mm}-${String(last).padStart(2, '0')}` };
 }
 
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
@@ -174,9 +176,9 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     const measured = setterClients(clients).map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null }));
     const detailClient = callsClient ? clients.find(c => c.client_id === callsClient) : undefined;
     if (ctab === 'shifts') {
-      // The Shifts tab always shows a full month — the 31 days ending on the picker's end
-      // date — whatever the picker's start is, so the calendar never shrinks to a few cells.
-      callsShifts = await getShiftScorecard(measured, { ...range, since: shiftWindowStart(range.until) });
+      // The Shifts tab always shows one whole calendar month — the month the picker's end
+      // date falls in, 1st to last day — whatever range the picker holds.
+      callsShifts = await getShiftScorecard(measured, { ...range, ...calendarMonth(range.until) });
     } else if (detailClient) {
       callsDetail = { client: detailClient, speed: await getClientSpeed(detailClient.client_id, range) };
     } else {
@@ -285,7 +287,7 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
             overview={callsOverview}
             detail={callsDetail}
             shifts={callsShifts}
-            shiftsSince={shiftWindowStart(range.until)}
+            shiftsMonth={calendarMonth(range.until)}
             tab={ctab}
             since={range.since}
             until={range.until}

@@ -20,6 +20,7 @@ export type CallDetail = { client: ClientOption; speed: ClientSpeed };
 type Tab = 'speed' | 'shifts';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const fmtDay = (iso: string): string => {
   const [y, m, d] = iso.split('-').map(Number);
@@ -41,12 +42,12 @@ const TierChip = ({ v }: { v: number | null }) =>
 const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number, arriving while the client's setter (or cover) was on shift per the daily Start of Day check-in. Leads that paid a deposit within 30 min, before anyone called them, self-booked and are left out. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored KPI. Connected = a completed call of 60s+ in that window. A lead nobody phoned counts as a miss. ${SPEED_TARGET_TEXT}`;
 
 export function CallTrackingView({
-  overview, detail, shifts, shiftsSince, tab, since, until,
+  overview, detail, shifts, shiftsMonth, tab, since, until,
 }: {
   overview: CallOverviewRow[];
   detail: CallDetail | null;
   shifts: ShiftScorecard | null;
-  shiftsSince: string;
+  shiftsMonth: { since: string; until: string };
   tab: Tab;
   since: string;
   until: string;
@@ -77,11 +78,14 @@ export function CallTrackingView({
       </div>
 
       {tab === 'shifts' && shifts ? (
-        <ShiftsView data={shifts} since={shiftsSince} until={until}
+        <ShiftsView data={shifts} since={shiftsMonth.since} until={shiftsMonth.until}
           onStep={dir => {
-            // Step the whole window a month earlier/later by moving the picker's end date.
-            const shift = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + dir * 31)).toISOString().slice(0, 10); };
-            const p = new URLSearchParams({ view: 'calls', ctab: 'shifts', since: shift(shiftsSince), until: shift(until) });
+            // Step one calendar month: point the picker at that month, 1st to last day.
+            const [y, m] = shiftsMonth.since.split('-').map(Number);
+            const first = new Date(Date.UTC(y, m - 1 + dir, 1));
+            const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0));
+            const iso = (d: Date) => d.toISOString().slice(0, 10);
+            const p = new URLSearchParams({ view: 'calls', ctab: 'shifts', since: iso(first), until: iso(last) });
             router.push(`/?${p.toString()}`);
           }} />
       ) : detail ? (
@@ -454,8 +458,8 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
   const [picked, setPicked] = useState<ShiftRow | null>(null);
   const [showTable, setShowTable] = useState(false);
 
-  // Columns = EVERY day of the month window, oldest → newest, so the calendar is always a
-  // full month; days with no check-in are simply blank. Rows = setters.
+  // Columns = EVERY day of the calendar month, 1st → last, so the calendar is always a
+  // whole month; days with no check-in (and days still to come) are simply blank.
   const days = useMemo(() => {
     const byDate = new Map(data.days.map(d => [d.date, d]));
     const out: ShiftScorecard['days'] = [];
@@ -494,7 +498,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
           <CalendarDays size={16} className="shrink-0 text-fg-dim" /> No check-ins recorded for this month. Viktor writes each setter&apos;s hours after the morning Start of Day thread.
         </div>
       ) : (
-        <Attention items={attention} total={badCount} noun={['shift', 'shifts']} allGood="Every shift with leads in this month hit target." />
+        <Attention items={attention} total={badCount} noun={['shift', 'shifts']} allGood="Every shift with leads this month hit target." />
       )}
 
       {/* Per-setter summary for the range */}
@@ -519,7 +523,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
             <div className="inline-flex items-center gap-2 text-sm font-semibold text-fg"><CalendarDays size={14} className="text-pink" /> Shift calendar</div>
             <div className="inline-flex items-center rounded-lg border border-border">
               <button onClick={() => onStep(-1)} aria-label="Earlier month" className="rounded-l-lg px-1.5 py-1 text-fg-muted transition-colors hover:bg-white/[0.04] hover:text-fg"><ChevronLeft size={14} /></button>
-              <span className="border-x border-border px-2.5 py-1 font-mono text-[11px] tabular-nums text-fg-muted">{fmtDay(since)} – {fmtDay(until)}</span>
+              <span className="border-x border-border px-3 py-1 text-xs font-medium text-fg">{MONTHS_LONG[Number(since.slice(5, 7)) - 1]} {since.slice(0, 4)}</span>
               <button onClick={() => onStep(1)} disabled={until >= todayIso} aria-label="Later month" className="rounded-r-lg px-1.5 py-1 text-fg-muted transition-colors hover:bg-white/[0.04] hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"><ChevronRight size={14} /></button>
             </div>
             <span className="text-xs text-fg-dim">click a day for the detail</span>
