@@ -75,7 +75,8 @@ export async function GET(req: Request) {
   const all = setterClients(await getActiveClients());
   let measured = all.map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null, name: c.client_name }));
   if (clientFilter) measured = measured.filter(c => c.client_id === clientFilter);
-  if (csrFilter) measured = measured.filter(c => c.csr === csrFilter);
+  // `csr` is applied per LEAD (responsible setter), not per client — so cover leads on a
+  // colleague's client count for the setter who was on, matching the KPIs page.
   const range = { since: from, until: to, label: '' };
 
   const [leads, shifts] = await Promise.all([evaluateLeads(measured, range), getShifts(range)]);
