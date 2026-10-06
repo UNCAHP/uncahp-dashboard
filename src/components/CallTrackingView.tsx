@@ -239,11 +239,13 @@ function Overview({ overview, onOpen }: { overview: CallOverviewRow[]; onOpen: (
       .sort((a, b) => b.row.leads - a.row.leads || a.client.client_name.localeCompare(b.client.client_name));
   }, [overview, search]);
 
-  // Below-target clients with enough leads to mean something, worst first.
+  // Every below-target client counts — the heading has to agree with the table beneath
+  // it. Worst first: most leads never phoned, then most leads missed overall, then rate.
   const { attention, belowCount } = useMemo(() => {
+    const missed = (r: CallOverviewRow) => r.row.leads - r.row.attempted;
     const below = overview
-      .filter(r => r.row.leads >= 5 && r.row.pct != null && r.row.pct < SPEED_TARGET_PCT)
-      .sort((a, b) => b.row.neverCalled - a.row.neverCalled || (a.row.pct ?? 0) - (b.row.pct ?? 0));
+      .filter(r => r.row.leads > 0 && r.row.pct != null && r.row.pct < SPEED_TARGET_PCT)
+      .sort((a, b) => b.row.neverCalled - a.row.neverCalled || missed(b) - missed(a) || (a.row.pct ?? 0) - (b.row.pct ?? 0));
     const attention: AttentionItem[] = below.slice(0, 4).map(r => ({
       key: r.client.client_id,
       title: r.client.client_name,
@@ -479,7 +481,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
   const cell = (csr: string, date: string) => days.find(d => d.date === date)?.rows.find(r => r.csr === csr) ?? null;
 
   const { attention, badCount } = useMemo(() => {
-    const bad = days.flatMap(d => d.rows).filter(r => !r.off && r.leads >= 3 && r.pct != null && r.pct < SPEED_TARGET_PCT)
+    const bad = days.flatMap(d => d.rows).filter(r => !r.off && r.leads > 0 && r.pct != null && r.pct < SPEED_TARGET_PCT)
       .sort((a, b) => b.date.localeCompare(a.date) || b.neverCalled - a.neverCalled);
     const attention: AttentionItem[] = bad.slice(0, 4).map(r => ({
       key: `${r.date}-${r.csr}`,
