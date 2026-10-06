@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Loader2, RefreshCw, ArrowLeft, Search, ChevronRight, Zap, Users, CalendarDays,
+  Loader2, RefreshCw, ArrowLeft, Search, ChevronRight, ChevronLeft, Zap, Users, CalendarDays,
   PhoneOutgoing, PhoneOff, PhoneCall, Gauge as GaugeIcon, Moon, AlertTriangle, CheckCircle2, Table2,
 } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
@@ -41,11 +41,12 @@ const TierChip = ({ v }: { v: number | null }) =>
 const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number, arriving while the client's setter (or cover) was on shift per the daily Start of Day check-in. Leads that paid a deposit within 30 min, before anyone called them, self-booked and are left out. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored KPI. Connected = a completed call of 60s+ in that window. A lead nobody phoned counts as a miss. ${SPEED_TARGET_TEXT}`;
 
 export function CallTrackingView({
-  overview, detail, shifts, tab, since, until,
+  overview, detail, shifts, shiftsSince, tab, since, until,
 }: {
   overview: CallOverviewRow[];
   detail: CallDetail | null;
   shifts: ShiftScorecard | null;
+  shiftsSince: string;
   tab: Tab;
   since: string;
   until: string;
@@ -76,7 +77,13 @@ export function CallTrackingView({
       </div>
 
       {tab === 'shifts' && shifts ? (
-        <ShiftsView data={shifts} />
+        <ShiftsView data={shifts} since={shiftsSince} until={until}
+          onStep={dir => {
+            // Step the whole window a month earlier/later by moving the picker's end date.
+            const shift = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + dir * 31)).toISOString().slice(0, 10); };
+            const p = new URLSearchParams({ view: 'calls', ctab: 'shifts', since: shift(shiftsSince), until: shift(until) });
+            router.push(`/?${p.toString()}`);
+          }} />
       ) : detail ? (
         <>
           <button onClick={() => navigate({})} className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-pink">
@@ -443,12 +450,24 @@ function LeadLog({ leads }: { leads: LeadEval[] }) {
 
 // ─── Shifts: a calendar of every setter's shifts, coloured by that shift's rate ──
 
-function ShiftsView({ data }: { data: ShiftScorecard }) {
+function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; since: string; until: string; onStep: (dir: -1 | 1) => void }) {
   const [picked, setPicked] = useState<ShiftRow | null>(null);
   const [showTable, setShowTable] = useState(false);
 
-  // Columns = every day with a check-in, oldest → newest. Rows = setters.
-  const days = useMemo(() => [...data.days].sort((a, b) => a.date.localeCompare(b.date)), [data.days]);
+  // Columns = EVERY day of the month window, oldest → newest, so the calendar is always a
+  // full month; days with no check-in are simply blank. Rows = setters.
+  const days = useMemo(() => {
+    const byDate = new Map(data.days.map(d => [d.date, d]));
+    const out: ShiftScorecard['days'] = [];
+    const [y, m, d0] = since.split('-').map(Number);
+    for (let i = 0; ; i++) {
+      const date = new Date(Date.UTC(y, m - 1, d0 + i)).toISOString().slice(0, 10);
+      if (date > until) break;
+      out.push(byDate.get(date) ?? { date, rows: [] });
+    }
+    return out;
+  }, [data.days, since, until]);
+  const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
   const setters = useMemo(() => {
     const order = CSR_SETTERS.map(c => c.key);
     return [...new Set(days.flatMap(d => d.rows.map(r => r.csr)))].sort((a, b) => (order.indexOf(a) + 99) - (order.indexOf(b) + 99) || a.localeCompare(b));
@@ -468,19 +487,15 @@ function ShiftsView({ data }: { data: ShiftScorecard }) {
     return { attention, badCount: bad.length };
   }, [days]);
 
-  if (days.length === 0) {
-    return (
-      <div className="rounded-2xl border border-border bg-surface p-12 text-center">
-        <CalendarDays size={22} className="mx-auto mb-2 text-fg-dim" />
-        <div className="text-sm text-fg">No shift data in this range</div>
-        <p className="mx-auto mt-1 max-w-sm text-xs text-fg-muted">Viktor writes each setter&apos;s hours here after the morning Start of Day check-in.</p>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-5">
-      <Attention items={attention} total={badCount} noun={['shift', 'shifts']} allGood="Every shift with leads in this range hit target." />
+      {data.days.length === 0 ? (
+        <div className="flex items-center gap-2.5 rounded-2xl border border-border bg-surface px-5 py-3.5 text-sm text-fg-muted">
+          <CalendarDays size={16} className="shrink-0 text-fg-dim" /> No check-ins recorded for this month. Viktor writes each setter&apos;s hours after the morning Start of Day thread.
+        </div>
+      ) : (
+        <Attention items={attention} total={badCount} noun={['shift', 'shifts']} allGood="Every shift with leads in this month hit target." />
+      )}
 
       {/* Per-setter summary for the range */}
       <div className="grid gap-3 sm:grid-cols-3">
@@ -500,7 +515,15 @@ function ShiftsView({ data }: { data: ShiftScorecard }) {
       {/* Calendar: one row per setter, one cell per day */}
       <div className="rounded-2xl border border-border bg-surface p-5">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex items-center gap-2 text-sm font-semibold text-fg"><CalendarDays size={14} className="text-pink" /> Shift calendar <span className="text-xs font-normal text-fg-dim">· click a day for the detail</span></div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="inline-flex items-center gap-2 text-sm font-semibold text-fg"><CalendarDays size={14} className="text-pink" /> Shift calendar</div>
+            <div className="inline-flex items-center rounded-lg border border-border">
+              <button onClick={() => onStep(-1)} aria-label="Earlier month" className="rounded-l-lg px-1.5 py-1 text-fg-muted transition-colors hover:bg-white/[0.04] hover:text-fg"><ChevronLeft size={14} /></button>
+              <span className="border-x border-border px-2.5 py-1 font-mono text-[11px] tabular-nums text-fg-muted">{fmtDay(since)} – {fmtDay(until)}</span>
+              <button onClick={() => onStep(1)} disabled={until >= todayIso} aria-label="Later month" className="rounded-r-lg px-1.5 py-1 text-fg-muted transition-colors hover:bg-white/[0.04] hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"><ChevronRight size={14} /></button>
+            </div>
+            <span className="text-xs text-fg-dim">click a day for the detail</span>
+          </div>
           <div className="flex items-center gap-3 text-[10px] text-fg-muted">
             <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-green/80" /> On target (≥{SPEED_TARGET_PCT}%)</span>
             <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-red/80" /> Below {SPEED_TARGET_PCT}%</span>

@@ -38,6 +38,12 @@ import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+// 31-day window ending on `until` (inclusive) → its first day, yyyy-mm-dd.
+function shiftWindowStart(until: string): string {
+  const [y, m, d] = until.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d - 30)).toISOString().slice(0, 10);
+}
+
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
 type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; ftab?: string; ctab?: string };
 
@@ -168,7 +174,9 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     const measured = setterClients(clients).map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null }));
     const detailClient = callsClient ? clients.find(c => c.client_id === callsClient) : undefined;
     if (ctab === 'shifts') {
-      callsShifts = await getShiftScorecard(measured, range);
+      // The Shifts tab always shows a full month — the 31 days ending on the picker's end
+      // date — whatever the picker's start is, so the calendar never shrinks to a few cells.
+      callsShifts = await getShiftScorecard(measured, { ...range, since: shiftWindowStart(range.until) });
     } else if (detailClient) {
       callsDetail = { client: detailClient, speed: await getClientSpeed(detailClient.client_id, range) };
     } else {
@@ -277,6 +285,7 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
             overview={callsOverview}
             detail={callsDetail}
             shifts={callsShifts}
+            shiftsSince={shiftWindowStart(range.until)}
             tab={ctab}
             since={range.since}
             until={range.until}
