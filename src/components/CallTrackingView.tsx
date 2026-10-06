@@ -124,24 +124,89 @@ function BarLegend() {
   );
 }
 
-// "Needs attention" — the sentence you read instead of the table.
-function Attention({ items, allGood }: { items: { key: string; text: string; sub?: string }[]; allGood: string }) {
-  if (items.length === 0) {
+// "Needs attention" — where to look first. One panel: a statement with the two totals
+// that matter, then the worst offenders as aligned, clickable cells. Colour is spent on
+// the figures, never on the container.
+type AttentionItem = {
+  key: string;
+  title: string;          // who/what — a client, or a setter's shift
+  meta: string;           // secondary context — the setter, or the shift hours
+  pct: number | null;
+  leads: number;
+  attempted: number;
+  neverCalled: number;
+  connected: number;
+  onClick?: () => void;
+};
+
+function Attention({ items, total, noun, allGood }: { items: AttentionItem[]; total: number; noun: [string, string]; allGood: string }) {
+  if (total === 0) {
     return (
-      <div className="flex items-center gap-2 rounded-xl border border-green/30 bg-green/10 px-4 py-2.5 text-xs text-green">
-        <CheckCircle2 size={14} /> {allGood}
+      <div className="flex items-center gap-2.5 rounded-2xl border border-border bg-surface px-5 py-3.5 text-sm text-fg">
+        <CheckCircle2 size={16} className="shrink-0 text-green" /> {allGood}
       </div>
     );
   }
+  const missed = items.reduce((n, i) => n + i.neverCalled, 0);
+  const more = total - items.length;
+  const late = (i: AttentionItem) => Math.max(0, i.leads - i.attempted - i.neverCalled);
+  // Blank cells keep the hairline grid from showing its backing colour when there are
+  // fewer offenders than columns: one to square off a 2-up row, the rest for the 4-up row.
+  const fillers = Array.from({ length: Math.max(0, 4 - items.length) }, (_, k) => (k === 0 && items.length % 2 === 1 ? 'hidden sm:block' : 'hidden xl:block'));
   return (
-    <div className="rounded-xl border border-yellow/30 bg-yellow/10 px-4 py-3">
-      <div className="mb-1.5 inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-yellow"><AlertTriangle size={12} /> Needs attention</div>
-      <ul className="space-y-1">
-        {items.map(i => (
-          <li key={i.key} className="text-xs text-fg">{i.text}{i.sub && <span className="text-fg-dim"> · {i.sub}</span>}</li>
-        ))}
-      </ul>
-    </div>
+    <section aria-label="Needs attention" className="overflow-hidden rounded-2xl border border-border bg-surface">
+      <div className="flex flex-col lg:flex-row">
+        <div className="shrink-0 border-b border-border p-5 lg:w-60 lg:border-b-0 lg:border-r">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={15} className="shrink-0 text-yellow" />
+            <h2 className="text-sm font-semibold text-fg">
+              <span className="font-mono tabular-nums">{total}</span> {total === 1 ? noun[0] : noun[1]} below {SPEED_TARGET_PCT}%
+            </h2>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-fg-muted">
+            {items.length > 1 && 'Worst first. '}
+            {missed > 0
+              ? <><span className="font-mono tabular-nums text-red">{missed}</span> lead{missed === 1 ? '' : 's'} never phoned{items.length > 1 ? ` across these ${items.length}` : ''}.</>
+              : 'Every lead was dialled, but too late.'}
+          </p>
+          {more > 0 && <p className="mt-1 text-xs text-fg-dim">{more} more in the table below.</p>}
+        </div>
+
+        {/* gap-px over the border colour draws hairlines that survive wrapping */}
+        <ol className="grid flex-1 grid-cols-1 gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
+          {items.map(i => {
+            const body = (
+              <>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 truncate text-sm font-medium text-fg group-hover:text-pink">{i.title}</span>
+                  <span className="shrink-0 font-mono text-base font-semibold tabular-nums text-red">{i.pct == null ? '—' : `${i.pct}%`}</span>
+                </div>
+                <div className="mt-0.5 truncate text-[11px] text-fg-dim">{i.meta}</div>
+                <OutcomeBar leads={i.leads} attempted={i.attempted} neverCalled={i.neverCalled} connected={i.connected} className="mt-3" />
+                <div className="mt-2 text-[11px] text-fg-muted">
+                  {i.neverCalled > 0 && <><span className="font-mono font-semibold tabular-nums text-red">{i.neverCalled}</span> never phoned</>}
+                  {i.neverCalled > 0 && late(i) > 0 && ' · '}
+                  {late(i) > 0 && <><span className="font-mono font-semibold tabular-nums text-fg">{late(i)}</span> late</>}
+                  <span className="text-fg-dim"> · of {i.leads}</span>
+                </div>
+              </>
+            );
+            return (
+              <li key={i.key} className="bg-surface">
+                {i.onClick ? (
+                  <button onClick={i.onClick} className="group block h-full w-full p-4 text-left transition-colors hover:bg-white/[0.03] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-pink">
+                    {body}
+                  </button>
+                ) : (
+                  <div className="group h-full p-4">{body}</div>
+                )}
+              </li>
+            );
+          })}
+          {fillers.map((cls, k) => <li key={`filler-${k}`} aria-hidden className={cn('bg-surface', cls)} />)}
+        </ol>
+      </div>
+    </section>
   );
 }
 
@@ -164,22 +229,23 @@ function Overview({ overview, onOpen }: { overview: CallOverviewRow[]; onOpen: (
   }, [overview, search]);
 
   // Below-target clients with enough leads to mean something, worst first.
-  const attention = useMemo(() => {
+  const { attention, belowCount } = useMemo(() => {
     const below = overview
       .filter(r => r.row.leads >= 5 && r.row.pct != null && r.row.pct < SPEED_TARGET_PCT)
       .sort((a, b) => b.row.neverCalled - a.row.neverCalled || (a.row.pct ?? 0) - (b.row.pct ?? 0));
-    const items: { key: string; text: string; sub?: string }[] = below.slice(0, 4).map(r => ({
+    const attention: AttentionItem[] = below.slice(0, 4).map(r => ({
       key: r.client.client_id,
-      text: `${r.client.client_name} · ${r.row.pct}% — ${r.row.neverCalled} of ${r.row.leads} leads never phoned`,
-      sub: setterLabel(r.row.csr),
+      title: r.client.client_name,
+      meta: setterLabel(r.row.csr),
+      pct: r.row.pct, leads: r.row.leads, attempted: r.row.attempted, neverCalled: r.row.neverCalled, connected: r.row.connected,
+      onClick: () => onOpen(r.client.client_id),
     }));
-    if (below.length > 4) items.push({ key: 'more', text: `…and ${below.length - 4} more clients below target`, sub: undefined });
-    return items;
-  }, [overview]);
+    return { attention, belowCount: below.length };
+  }, [overview, onOpen]);
 
   return (
     <>
-      <Attention items={attention} allGood="Every measured client is on target for this range." />
+      <Attention items={attention} total={belowCount} noun={['client', 'clients']} allGood="Every measured client is on target for this range." />
 
       <TeamBand leads={team.leads} attempted={team.attempted} connected={team.connected} never={team.never} pct={team.pct} note={`all measured clients${team.selfBooked ? ` · ${team.selfBooked} self-booked within ${SPEED_TO_LEAD_MINUTES}m, not counted` : ''}`} />
 
@@ -389,12 +455,17 @@ function ShiftsView({ data }: { data: ShiftScorecard }) {
   }, [days]);
   const cell = (csr: string, date: string) => days.find(d => d.date === date)?.rows.find(r => r.csr === csr) ?? null;
 
-  const attention = useMemo(() => {
+  const { attention, badCount } = useMemo(() => {
     const bad = days.flatMap(d => d.rows).filter(r => !r.off && r.leads >= 3 && r.pct != null && r.pct < SPEED_TARGET_PCT)
       .sort((a, b) => b.date.localeCompare(a.date) || b.neverCalled - a.neverCalled);
-    const items: { key: string; text: string; sub?: string }[] = bad.slice(0, 4).map(r => ({ key: `${r.date}-${r.csr}`, text: `${setterLabel(r.csr)} · ${fmtDay(r.date)} · ${r.pct}% — ${r.neverCalled} of ${r.leads} leads never phoned on a ${r.start}–${r.end} shift`, sub: r.coverLeads ? `${r.coverLeads} were cover` : undefined }));
-    if (bad.length > 4) items.push({ key: 'more', text: `…and ${bad.length - 4} more shifts below target`, sub: undefined });
-    return items;
+    const attention: AttentionItem[] = bad.slice(0, 4).map(r => ({
+      key: `${r.date}-${r.csr}`,
+      title: `${setterLabel(r.csr)} · ${fmtDay(r.date)}`,
+      meta: `${r.start}–${r.end} shift${r.coverLeads ? ` · ${r.coverLeads} cover` : ''}`,
+      pct: r.pct, leads: r.leads, attempted: r.attempted, neverCalled: r.neverCalled, connected: r.connected,
+      onClick: () => setPicked(r),
+    }));
+    return { attention, badCount: bad.length };
   }, [days]);
 
   if (days.length === 0) {
@@ -409,7 +480,7 @@ function ShiftsView({ data }: { data: ShiftScorecard }) {
 
   return (
     <div className="space-y-5">
-      <Attention items={attention} allGood="Every shift with leads in this range hit target." />
+      <Attention items={attention} total={badCount} noun={['shift', 'shifts']} allGood="Every shift with leads in this range hit target." />
 
       {/* Per-setter summary for the range */}
       <div className="grid gap-3 sm:grid-cols-3">
