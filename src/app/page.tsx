@@ -176,9 +176,11 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     const measured = setterClients(clients).map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null }));
     const detailClient = callsClient ? clients.find(c => c.client_id === callsClient) : undefined;
     if (ctab === 'shifts') {
-      // The Shifts tab always shows one whole calendar month — the month the picker's end
-      // date falls in, 1st to last day — whatever range the picker holds.
-      callsShifts = await getShiftScorecard(measured, { ...range, ...calendarMonth(range.until) });
+      // The Shifts tab's CALENDAR always shows one whole month — the month the picker's end
+      // date falls in — while its cards, attention panel and table follow the picker. So
+      // load the union: from whichever starts earlier, to the end of that month.
+      const cm = calendarMonth(range.until);
+      callsShifts = await getShiftScorecard(measured, { ...range, since: range.since < cm.since ? range.since : cm.since, until: cm.until });
     } else if (detailClient) {
       callsDetail = { client: detailClient, speed: await getClientSpeed(detailClient.client_id, range) };
     } else {

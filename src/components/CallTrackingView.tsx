@@ -78,7 +78,7 @@ export function CallTrackingView({
       </div>
 
       {tab === 'shifts' && shifts ? (
-        <ShiftsView data={shifts} since={shiftsMonth.since} until={shiftsMonth.until}
+        <ShiftsView data={shifts} since={shiftsMonth.since} until={shiftsMonth.until} rangeSince={since} rangeUntil={until}
           onStep={dir => {
             // Step one calendar month: point the picker at that month, 1st to last day.
             const [y, m] = shiftsMonth.since.split('-').map(Number);
@@ -456,7 +456,7 @@ function LeadLog({ leads }: { leads: LeadEval[] }) {
 
 // ─── Shifts: a calendar of every setter's shifts, coloured by that shift's rate ──
 
-function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; since: string; until: string; onStep: (dir: -1 | 1) => void }) {
+function ShiftsView({ data, since, until, rangeSince, rangeUntil, onStep }: { data: ShiftScorecard; since: string; until: string; rangeSince: string; rangeUntil: string; onStep: (dir: -1 | 1) => void }) {
   const [picked, setPicked] = useState<ShiftRow | null>(null);
   const [showTable, setShowTable] = useState(false);
 
@@ -474,6 +474,21 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
     return out;
   }, [data.days, since, until]);
   const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+
+  // The calendar is the whole month; everything else on the tab follows the date picker.
+  const inRange = (date: string) => date >= rangeSince && date <= rangeUntil;
+  const rangeDays = useMemo(() => data.days.filter(d => d.date >= rangeSince && d.date <= rangeUntil), [data.days, rangeSince, rangeUntil]);
+  const rangeSetters = useMemo(() => {
+    const by = new Map<string, ShiftScorecard['setters'][number]>();
+    for (const r of rangeDays.flatMap(d => d.rows)) {
+      const s = by.get(r.csr) ?? { csr: r.csr, shifts: 0, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null };
+      if (!r.off) s.shifts++;
+      s.leads += r.leads; s.attempted += r.attempted; s.connected += r.connected; s.neverCalled += r.neverCalled;
+      by.set(r.csr, s);
+    }
+    return [...by.values()].map(s => ({ ...s, pct: s.leads ? +((100 * s.attempted) / s.leads).toFixed(1) : null })).sort((a, b) => b.leads - a.leads);
+  }, [rangeDays]);
+  const rangeLabel = rangeSince === rangeUntil ? fmtDay(rangeSince) : `${fmtDay(rangeSince)} – ${fmtDay(rangeUntil)}`;
   const setters = useMemo(() => {
     const order = CSR_SETTERS.map(c => c.key);
     return [...new Set(days.flatMap(d => d.rows.map(r => r.csr)))].sort((a, b) => (order.indexOf(a) + 99) - (order.indexOf(b) + 99) || a.localeCompare(b));
@@ -481,7 +496,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
   const cell = (csr: string, date: string) => days.find(d => d.date === date)?.rows.find(r => r.csr === csr) ?? null;
 
   const { attention, badCount } = useMemo(() => {
-    const bad = days.flatMap(d => d.rows).filter(r => !r.off && r.leads > 0 && r.pct != null && r.pct < SPEED_TARGET_PCT)
+    const bad = rangeDays.flatMap(d => d.rows).filter(r => !r.off && r.leads > 0 && r.pct != null && r.pct < SPEED_TARGET_PCT)
       .sort((a, b) => b.date.localeCompare(a.date) || b.neverCalled - a.neverCalled);
     const attention: AttentionItem[] = bad.slice(0, 4).map(r => ({
       key: `${r.date}-${r.csr}`,
@@ -491,21 +506,21 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
       onClick: () => setPicked(r),
     }));
     return { attention, badCount: bad.length };
-  }, [days]);
+  }, [rangeDays]);
 
   return (
     <div className="space-y-5">
-      {data.days.length === 0 ? (
+      {rangeDays.length === 0 ? (
         <div className="flex items-center gap-2.5 rounded-2xl border border-border bg-surface px-5 py-3.5 text-sm text-fg-muted">
-          <CalendarDays size={16} className="shrink-0 text-fg-dim" /> No check-ins recorded for this month. Viktor writes each setter&apos;s hours after the morning Start of Day thread.
+          <CalendarDays size={16} className="shrink-0 text-fg-dim" /> No check-ins recorded for {rangeLabel}. Viktor writes each setter&apos;s hours after the morning Start of Day thread.
         </div>
       ) : (
-        <Attention items={attention} total={badCount} noun={['shift', 'shifts']} allGood="Every shift with leads this month hit target." />
+        <Attention items={attention} total={badCount} noun={['shift', 'shifts']} allGood={`Every shift with leads in ${rangeLabel} hit target.`} />
       )}
 
       {/* Per-setter summary for the range */}
       <div className="grid gap-3 sm:grid-cols-3">
-        {data.setters.map(s => (
+        {rangeSetters.map(s => (
           <div key={s.csr} className="rounded-2xl border border-border bg-surface p-4">
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold text-fg">{setterLabel(s.csr)}</div>
@@ -513,7 +528,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
             </div>
             <div className={cn('mt-1 font-mono text-3xl font-bold tabular-nums', speedText(s.pct))}>{pct(s.pct)}</div>
             <OutcomeBar leads={s.leads} attempted={s.attempted} neverCalled={s.neverCalled} connected={s.connected} className="mt-2" />
-            <div className="mt-1.5 text-[11px] text-fg-dim">{s.leads} leads over {s.shifts} shift{s.shifts === 1 ? '' : 's'}</div>
+            <div className="mt-1.5 text-[11px] text-fg-dim">{s.leads} leads over {s.shifts} shift{s.shifts === 1 ? '' : 's'} · {rangeLabel}</div>
           </div>
         ))}
       </div>
@@ -528,7 +543,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
               <span className="border-x border-border px-3 py-1 text-xs font-medium text-fg">{MONTHS_LONG[Number(since.slice(5, 7)) - 1]} {since.slice(0, 4)}</span>
               <button onClick={() => onStep(1)} disabled={until >= todayIso} aria-label="Later month" className="rounded-r-lg px-1.5 py-1 text-fg-muted transition-colors hover:bg-white/[0.04] hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"><ChevronRight size={14} /></button>
             </div>
-            <span className="text-xs text-fg-dim">click a day for the detail</span>
+            <span className="text-xs text-fg-dim">click a day for the detail · days outside the selected dates are dimmed</span>
           </div>
           <div className="flex items-center gap-3 text-[10px] text-fg-muted">
             <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-green/80" /> On target (≥{SPEED_TARGET_PCT}%)</span>
@@ -545,7 +560,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
                 {days.map(d => {
                   const [y, m, dd] = d.date.split('-').map(Number);
                   const dow = new Date(Date.UTC(y, m - 1, dd)).getUTCDay();
-                  return <th key={d.date} className={cn('px-0 pb-1 text-center text-[9px] font-medium tabular-nums', dow === 0 || dow === 6 ? 'text-fg-dim' : 'text-fg-muted')}>{dd}<br /><span className="text-[8px]">{DOW[dow][0]}</span></th>;
+                  return <th key={d.date} className={cn('px-0 pb-1 text-center text-[9px] font-medium tabular-nums', dow === 0 || dow === 6 ? 'text-fg-dim' : 'text-fg-muted', inRange(d.date) ? 'text-fg' : 'opacity-40')}>{dd}<br /><span className="text-[8px]">{DOW[dow][0]}</span></th>;
                 })}
               </tr>
             </thead>
@@ -553,7 +568,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
               {setters.map(csr => (
                 <tr key={csr}>
                   <td className="pr-2 text-xs font-medium text-fg">{setterLabel(csr)}</td>
-                  {days.map(d => <ShiftCell key={d.date} r={cell(csr, d.date)} active={picked?.csr === csr && picked?.date === d.date} onClick={() => { const r = cell(csr, d.date); setPicked(r && !r.off ? r : null); }} />)}
+                  {days.map(d => <ShiftCell key={d.date} dim={!inRange(d.date)} r={cell(csr, d.date)} active={picked?.csr === csr && picked?.date === d.date} onClick={() => { const r = cell(csr, d.date); setPicked(r && !r.off ? r : null); }} />)}
                 </tr>
               ))}
             </tbody>
@@ -604,7 +619,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
               </tr>
             </thead>
             <tbody>
-              {data.days.map(d => (
+              {rangeDays.map(d => (
                 <Fragment key={d.date}>
                   <tr className="border-b border-border/60 bg-black/20">
                     <td colSpan={8} className="px-4 py-2 text-xs font-semibold text-fg">{fmtDay(d.date)}</td>
@@ -620,7 +635,7 @@ function ShiftsView({ data, since, until, onStep }: { data: ShiftScorecard; sinc
   );
 }
 
-function ShiftCell({ r, active, onClick }: { r: ShiftRow | null; active: boolean; onClick: () => void }) {
+function ShiftCell({ r, active, dim, onClick }: { r: ShiftRow | null; active: boolean; dim: boolean; onClick: () => void }) {
   if (!r) return <td><div className="h-7 w-7 rounded-md" /></td>;
   const label = r.off
     ? `${setterLabel(r.csr)} · ${fmtDay(r.date)} · off`
@@ -630,7 +645,7 @@ function ShiftCell({ r, active, onClick }: { r: ShiftRow | null; active: boolean
     : onTarget(r.pct) ? 'bg-green/80'
     : 'bg-red/80';
   return (
-    <td>
+    <td className={cn(dim && 'opacity-35')}>
       <Tooltip label={label} always>
         <button onClick={onClick} disabled={r.off}
           className={cn('flex h-7 w-7 items-center justify-center rounded-md text-[9px] font-semibold tabular-nums transition-transform', cls, !r.off && 'hover:scale-110', active && 'ring-2 ring-pink ring-offset-1 ring-offset-surface', r.off ? 'text-fg-dim' : r.leads === 0 ? 'text-fg-dim' : 'text-black')}>
