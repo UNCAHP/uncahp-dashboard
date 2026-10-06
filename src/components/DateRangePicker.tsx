@@ -101,10 +101,14 @@ export function DateRangePicker({ since, until, view, client, funnel }: Props) {
 
   function apply() {
     if (!start || !end) return;
-    const p = new URLSearchParams();
-    if (view && view !== 'overview') p.set('view', view);
-    if (client) p.set('client', client);
-    if (funnel) p.set('funnel', funnel);
+    // Start from the current URL so page state the picker doesn't know about survives a
+    // date change — the Call Tracking tab (ctab), the Funnel Analytics tab (ftab), the
+    // active/inactive filter (fstatus). Only the range itself is replaced.
+    const p = new URLSearchParams(window.location.search);
+    if (view && view !== 'overview') p.set('view', view); else p.delete('view');
+    if (client) p.set('client', client); else p.delete('client');
+    if (funnel) p.set('funnel', funnel); else p.delete('funnel');
+    p.delete('days');
     p.set('since', iso(start));
     p.set('until', iso(end));
     router.push(`/?${p.toString()}`);
