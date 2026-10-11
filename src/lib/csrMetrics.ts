@@ -1,6 +1,7 @@
 import { supabase, supabaseAdmin } from './supabase';
 import type { DateRange } from './queries';
 import { SPEED_TO_LEAD_MINUTES, hasRefTag, isTrackedSetter } from './csrConstants';
+import { isTestLead } from '@/lib/testLeads';
 
 // ─── Speed to Lead ───────────────────────────────────────────────────────────
 // "% of new leads with an outbound dial within 30 min of enquiry, during setter shifts".
@@ -96,9 +97,9 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
   const assigned = new Map(clients.map(c => [c.client_id, c.csr]));
 
   const [contacts, calls, shifts, txns] = await Promise.all([
-    pageAll<{ location_id: string; source_id: string; first_name: string | null; last_name: string | null; date_added: string | null; phone: string | null; tags: unknown }>((f, t) =>
+    pageAll<{ location_id: string; source_id: string; first_name: string | null; last_name: string | null; email: string | null; date_added: string | null; phone: string | null; tags: unknown }>((f, t) =>
       supabase.from('ghl_contacts')
-        .select('location_id, source_id, first_name, last_name, date_added, phone, tags')
+        .select('location_id, source_id, first_name, last_name, email, date_added, phone, tags')
         .in('location_id', ids)
         .gte('date_added', `${range.since}T00:00:00Z`)
         .lte('date_added', `${range.until}T23:59:59Z`)
@@ -156,6 +157,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
   const out: LeadEval[] = [];
   for (const l of contacts) {
     if (!l.date_added || !String(l.phone ?? '').trim() || !hasRefTag(l.tags)) continue;
+    if (isTestLead(l)) continue; // the team's own test submissions aren't leads
     const day = londonDate(l.date_added);
     const t = londonClock(l.date_added);
     const on = (byDay.get(day) ?? []).filter(s => t >= s.start && t < s.end);
