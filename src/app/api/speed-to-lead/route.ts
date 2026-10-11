@@ -5,10 +5,13 @@ import { setterClients, isTrackedSetter, UNTRACKED_SETTERS, SPEED_TO_LEAD_MINUTE
 // Read-only Speed to Lead for Viktor (the Slack CSR bot), so it can report back to Slack.
 // Same bearer secret as /api/shifts — one integration, one credential.
 //
-//   GET /api/speed-to-lead?from=YYYY-MM-DD&to=YYYY-MM-DD[&csr=alexis][&client=<ghl location id>]
+//   GET /api/speed-to-lead?from=YYYY-MM-DD&to=YYYY-MM-DD[&csr=alexis][&client=<ghl location id>][&leads=1]
 //   Authorization: Bearer <SHIFTS_API_SECRET>
 //
 // Defaults: from = to = today (London). `csr` narrows to one setter; `client` to one client.
+// `leads=1` (or `leads=missed`) adds a lead-by-lead `leads` list — every measured lead with
+// when it came in, who was responsible, when it was first dialled and how late that was.
+// `leads=missed` keeps only the ones not dialled within the window (never phoned first).
 // Visibility (who may see whose numbers) is Viktor's job — it knows who's asking; this
 // endpoint returns the measured data for the range it's given.
 //
@@ -67,6 +70,9 @@ export async function GET(req: Request) {
   if (to < from) return Response.json({ ok: false, error: '`to` is before `from`' }, { status: 400 });
   const csrFilter = url.searchParams.get('csr')?.trim().toLowerCase() || null;
   const clientFilter = url.searchParams.get('client')?.trim() || null;
+  const leadsParam = url.searchParams.get('leads')?.trim().toLowerCase() || null;
+  const wantLeads = leadsParam != null && leadsParam !== '0' && leadsParam !== 'false';
+  const onlyMissed = leadsParam === 'missed';
 
   if (csrFilter && !isTrackedSetter(csrFilter)) {
     return Response.json({ ok: true, from, to, csr: label(csrFilter), tracked: false, note: 'Speed to Lead is not tracked for this setter.' });
@@ -85,9 +91,11 @@ export async function GET(req: Request) {
 
   const team = bucket();
   const bySetter = new Map<string, { b: Bucket; clients: Map<string, Bucket> }>();
+  const detail: LeadEval[] = [];
   for (const l of leads) {
     // When filtering by setter, keep only leads they were responsible for (own + cover).
     if (csrFilter && l.responsible !== csrFilter) continue;
+    if (wantLeads && (!onlyMissed || (!l.selfBooked && !l.attempted))) detail.push(l);
     add(team, l);
     const s = bySetter.get(l.responsible) ?? { b: bucket(), clients: new Map() };
     add(s.b, l);
@@ -112,6 +120,33 @@ export async function GET(req: Request) {
       .sort((a, c) => c.leads - a.leads),
   })).sort((a, c) => c.leads - a.leads);
 
+  // Lead-by-lead list: never-phoned first, then latest dials first, then newest leads.
+  const leadRows = detail
+    .map(l => ({
+      name: l.name,
+      client_id: l.client_id,
+      client: nameOf.get(l.client_id) ?? l.client_id,
+      arrived_at: l.arrivedAt,
+      day: l.day,
+      responsible: label(l.responsible),
+      responsible_key: l.responsible,
+      covering: l.cover,
+      first_dial_at: l.firstDialAt,
+      first_dialled_by: l.firstDialBy,
+      minutes_to_first_dial: l.minsToDial,
+      minutes_late: l.minsToDial == null ? null : Math.max(0, l.minsToDial - SPEED_TO_LEAD_MINUTES),
+      attempted_within_30m: l.attempted,
+      connected_within_30m: l.connected,
+      never_phoned: !l.selfBooked && !l.firstDialBy,
+      self_booked_excluded: l.selfBooked,
+      paid_at: l.paidAt,
+      outcome: l.selfBooked ? 'self_booked' : !l.firstDialBy ? 'never_phoned' : l.attempted ? 'on_time' : 'late',
+    }))
+    .sort((a, c) => {
+      const rank = (r: typeof a) => (r.outcome === 'never_phoned' ? 0 : r.outcome === 'late' ? 1 : r.outcome === 'on_time' ? 2 : 3);
+      return rank(a) - rank(c) || (c.minutes_late ?? 0) - (a.minutes_late ?? 0) || c.arrived_at.localeCompare(a.arrived_at);
+    });
+
   return Response.json({
     ok: true,
     from, to,
@@ -121,6 +156,7 @@ export async function GET(req: Request) {
     not_tracked: UNTRACKED_SETTERS.map(label),
     team: out(team),
     setters,
+    ...(wantLeads ? { leads: leadRows, leads_filter: onlyMissed ? 'missed' : 'all' } : {}),
     definition: `A new lead is a contact with a campaign REF tag and a phone number that arrived while its client's assigned setter (or cover) was on shift. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored rate. Connected = a completed 60s+ call within ${SPEED_TO_LEAD_MINUTES} min. A lead that paid a deposit within ${SPEED_TO_LEAD_MINUTES} min before any dial self-booked and is excluded. Target ${SPEED_TARGET_PCT}%.`,
   });
 }
