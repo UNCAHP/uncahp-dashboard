@@ -5,6 +5,12 @@ import { SPLIT_CONFIDENCE_TO_CALL, SPLIT_MIN_VIEWS_PER_VARIANT } from './optimis
 // visitors per funnel/variant/event) and turns it into a per-variant funnel plus a
 // "can you call it yet?" confidence read, using a two-proportion z-test between the
 // leading variant and its closest rival on the primary metric.
+//
+// Two time frames on purpose:
+//   • the scoreboard (variants, confidence, winner) is ALL-TIME — a test is judged on its
+//     whole sample, and slicing it to a week would flip leaders and un-call winners;
+//   • `ranged` is the same first-party counts inside the dashboard's date range — what the
+//     funnel's own stage numbers show, so they line up with the Meta/GHL figures beside them.
 
 export type VariantStat = {
   key: string;
@@ -34,8 +40,17 @@ export type SplitTest = {
   confidencePct: number | null; // 0–100; null when not computable yet
   callable: boolean;          // confidence ≥ 95% AND both variants have enough traffic
   winnerKey: string | null;   // the declared winner (status 'decided'); collapses to simple flow
-  decidedAt: string | null;   // when the test was called — places it on the cadence timeline
+  decidedAt: string | null;   // when the test was called
+  // First-party unique visitors per stage within the requested date range, all versions
+  // combined. Each stage is counted on the day it happened, so a short range can hold an
+  // opt-in whose view fell before it. Null when no range was asked for.
+  // `byVariant` holds the same counts for each version on its own — a declared winner's
+  // become the funnel's headline numbers.
+  ranged: (RangeCounts & { byVariant: Record<string, RangeCounts> }) | null;
+  firstEventAt: string | null; // when tracking started recording for this funnel
 };
+
+export type RangeCounts = { views: number; optins: number; deposits: number };
 
 type SummaryRow = { funnel_key: string; variant: string; event: string; visitors: number };
 type FunnelRow = {
@@ -71,7 +86,56 @@ function normalizeVariants(raw: unknown): { key: string; label: string }[] {
     .filter(v => v.key);
 }
 
-export async function getSplitTests(): Promise<SplitTest[]> {
+// Distinct visitors per funnel and stage inside a date range, bots excluded. Counted here
+// from the raw rows (a few thousand per month) rather than in SQL, so the range filter
+// needs no extra database function.
+type Ranged = RangeCounts & { byVariant: Record<string, RangeCounts> };
+async function rangedCounts(keys: string[], range: { since: string; until: string }): Promise<Map<string, Ranged>> {
+  type Sets = { view: Set<string>; optin: Set<string>; deposit: Set<string> };
+  const sets = (): Sets => ({ view: new Set(), optin: new Set(), deposit: new Set() });
+  const sizes = (s: Sets): RangeCounts => ({ views: s.view.size, optins: s.optin.size, deposits: s.deposit.size });
+  const seen = new Map<string, { all: Sets; variants: Map<string, Sets> }>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from('funnel_events')
+      .select('funnel_key, variant, event, visitor_id')
+      .in('funnel_key', keys)
+      .eq('is_bot', false)
+      .gte('created_at', `${range.since}T00:00:00Z`)
+      .lte('created_at', `${range.until}T23:59:59.999Z`)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    for (const r of (data ?? []) as { funnel_key: string; variant: string; event: 'view' | 'optin' | 'deposit'; visitor_id: string }[]) {
+      let s = seen.get(r.funnel_key);
+      if (!s) { s = { all: sets(), variants: new Map() }; seen.set(r.funnel_key, s); }
+      let v = s.variants.get(r.variant);
+      if (!v) { v = sets(); s.variants.set(r.variant, v); }
+      s.all[r.event]?.add(r.visitor_id);
+      v[r.event]?.add(r.visitor_id);
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  return new Map([...seen].map(([k, s]) => [k, {
+    ...sizes(s.all),
+    byVariant: Object.fromEntries([...s.variants].map(([variant, v]) => [variant, sizes(v)])),
+  }]));
+}
+
+// When each funnel's tracking first recorded anything — ranges before it read as zero.
+async function firstEvents(keys: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  await Promise.all(keys.map(async k => {
+    const { data } = await supabaseAdmin.from('funnel_events').select('created_at').eq('funnel_key', k).order('created_at', { ascending: true }).limit(1);
+    const at = data?.[0]?.created_at as string | undefined;
+    if (at) out.set(k, at);
+  }));
+  return out;
+}
+
+export async function getSplitTests(range?: { since: string; until: string }): Promise<SplitTest[]> {
   // Try with winner_variant (migration 0012); fall back without it (0011 only). Before 0011
   // the columns don't exist at all — degrade to an empty scoreboard rather than crash.
   const base = 'id, client_id, name, track_key, variants, split_status';
@@ -93,6 +157,10 @@ export async function getSplitTests(): Promise<SplitTest[]> {
     .in('funnel_key', keys);
   if (sErr) throw sErr;
   const summary = (sumData ?? []) as SummaryRow[];
+  const [inRange, firstAt] = await Promise.all([
+    range ? rangedCounts(keys, range) : Promise.resolve(null),
+    firstEvents(keys),
+  ]);
 
   // client_id → client_name for display.
   const { data: clientData } = await supabaseAdmin.from('clients').select('ghl_location_id, client_name');
@@ -191,6 +259,8 @@ export async function getSplitTests(): Promise<SplitTest[]> {
       callable,
       winnerKey: isTest && declared.some(d => d.key === f.winner_variant) ? (f.winner_variant as string) : null,
       decidedAt: f.split_decided_at ? String(f.split_decided_at) : null,
+      ranged: inRange ? (inRange.get(key) ?? { views: 0, optins: 0, deposits: 0, byVariant: {} }) : null,
+      firstEventAt: firstAt.get(key) ?? null,
     };
   }).sort((a, b) => b.totalViews - a.totalViews);
 }

@@ -1,10 +1,11 @@
-import { Suspense } from 'react';
 import { headers } from 'next/headers';
 import {
   PoundSterling, Users, TrendingDown, UserCheck, DollarSign, Sparkles,
   Percent, Eye, ShoppingCart,
 } from 'lucide-react';
 import { Sidebar } from '@/components/Sidebar';
+import { Fragment, Suspense } from 'react';
+import { NavMain } from '@/components/NavProgress';
 import { ContentLoader } from '@/components/ContentLoader';
 import { Topbar } from '@/components/Topbar';
 import { KpiCardV2 } from '@/components/KpiCardV2';
@@ -15,11 +16,10 @@ import { CampaignExplorer } from '@/components/CampaignExplorer';
 import { PlaceholderView } from '@/components/PlaceholderView';
 import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
 import { CallTrackingView, type CallOverviewRow, type CallDetail } from '@/components/CallTrackingView';
-import type { ShiftScorecard } from '@/lib/csrMetrics';
+import type { SetterCard } from '@/lib/csrMetrics';
 import { BookingsView } from '@/components/BookingsView';
 import { AllBookingsView } from '@/components/AllBookingsView';
 import { KpisView } from '@/components/KpisView';
-import { getOptimisations, getOptimisationMonths, type OptimisationEntry } from '@/lib/optimisations';
 import { getSplitTests, type SplitTest } from '@/lib/splitTests';
 import { getBookings, getBookingMonths, getMonthCost, getAllBookings, getAllBookingMonths, type Booking, type BookingMonthCost } from '@/lib/bookingsAdmin';
 import { getCsrScorecard, getKpiMonths, getCsrDaily, getSheetSyncAgeHours, getCsrSpeedToLead, type CsrKpiRow, type CsrDayRow, type CsrSpeedRow } from '@/lib/kpis';
@@ -30,7 +30,7 @@ import {
 } from '@/lib/queries';
 import { getAdminClients } from '@/lib/clientAdmin';
 import { getAdminFunnels } from '@/lib/funnelAdmin';
-import { getClientSpeed, getClientSpeedRows, getShiftScorecard } from '@/lib/csrMetrics';
+import { getClientSpeed, getClientSpeedRows, getSetterScorecard } from '@/lib/csrMetrics';
 import { setterClients } from '@/lib/csrConstants';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
@@ -38,16 +38,8 @@ import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// The calendar month containing `until`: its first and last day, yyyy-mm-dd.
-function calendarMonth(until: string): { since: string; until: string } {
-  const [y, m] = until.split('-').map(Number);
-  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const mm = String(m).padStart(2, '0');
-  return { since: `${y}-${mm}-01`, until: `${y}-${mm}-${String(last).padStart(2, '0')}` };
-}
-
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
-type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; ftab?: string; ctab?: string };
+type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; ctab?: string };
 
 function parseView(v: string | undefined): View {
   const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
@@ -73,9 +65,11 @@ function paramsRange(params: SearchParams) {
   return defaultRange(Math.max(1, Math.min(365, Number(params.days) || 30)));
 }
 
-// Shell: the sidebar renders immediately and stays put across navigations. Only the
-// main data area is wrapped in a keyed Suspense — a date/view/client/funnel change
-// re-keys → re-suspends → shows the content skeleton (numbers only), not the whole UI.
+// Shell: the sidebar renders immediately and stays put across navigations. The main data
+// area sits in one Suspense boundary that is deliberately NOT keyed: the first load shows
+// the skeleton, and after that a date/view/client/funnel change keeps the current view on
+// screen (dimmed, under the progress bar — see NavProgress) until the next one is ready.
+// MainContent keys its own output on the params, so each view still mounts fresh.
 export default async function Page({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
   const range = paramsRange(params);
@@ -85,11 +79,11 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   return (
     <div className="flex min-h-screen bg-bg text-fg">
       <Sidebar view={view} selectedClient={scopedClient} since={range.since} until={range.until} clients={clients} />
-      <main className="min-w-0 flex-1">
-        <Suspense key={JSON.stringify(params)} fallback={<ContentLoader />}>
+      <NavMain className="min-w-0 flex-1">
+        <Suspense fallback={<ContentLoader />}>
           <MainContent params={params} clients={clients} />
         </Suspense>
-      </main>
+      </NavMain>
     </div>
   );
 }
@@ -117,7 +111,7 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
       : Promise.resolve([] as CampaignNode[]),
     view === 'clients' ? getAdminClients() : Promise.resolve([]),
     view === 'funnel' ? getAdminFunnels() : Promise.resolve([]),
-    view === 'funnel' ? getSplitTests() : Promise.resolve([] as SplitTest[]),
+    view === 'funnel' ? getSplitTests(range) : Promise.resolve([] as SplitTest[]),
   ]);
 
   // Split tests live inside Funnel Analytics — the snippet needs this dashboard's own
@@ -149,40 +143,20 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     : [];
   const funnelMetricsList = await Promise.all(funnelsToShow.map(f => getFunnelMetrics(f, range)));
 
-  // Optimisation Cadence — the sub-page of Funnel Analytics. Each entry costs two
-  // getFunnelMetrics calls (the windows either side of the change), so it's scoped to one
-  // month and only loaded when that tab is actually open.
-  const ftab = params.ftab === 'cadence' ? 'cadence' : 'funnels';
-  let optimisations: OptimisationEntry[] = [];
-  let optimisationMonths: string[] = [];
-  let optimisationMonth: string | null = null;
-  if (view === 'funnel' && ftab === 'cadence') {
-    optimisationMonths = await getOptimisationMonths();
-    // Default to the current month so a freshly logged change is visible straight away,
-    // even before any month has entries.
-    const thisMonth = `${new Date().toISOString().slice(0, 7)}-01`;
-    if (!optimisationMonths.includes(thisMonth)) optimisationMonths = [thisMonth, ...optimisationMonths];
-    optimisationMonth = params.month && optimisationMonths.includes(params.month) ? params.month : optimisationMonths[0];
-    optimisations = await getOptimisations(optimisationMonth, adminFunnels);
-  }
-
-  // Call Tracking — Speed to Lead only. Two tabs: per-client ("speed", with a drill-in)
-  // and per-shift ("shifts"). Only B2C clients with an assigned setter are measured.
-  const ctab = params.ctab === 'shifts' ? 'shifts' : 'speed';
+  // Call Tracking — Speed to Lead, in two views of the same leads: by client (with a
+  // drill-in to one client's lead log) and by setter. Only B2C clients with an assigned,
+  // tracked setter are measured.
+  const ctab = params.ctab === 'setters' || params.ctab === 'shifts' ? 'setters' : 'clients';
   let callsOverview: CallOverviewRow[] = [];
   let callsDetail: CallDetail | null = null;
-  let callsShifts: ShiftScorecard | null = null;
+  let callsSetters: SetterCard[] = [];
   if (view === 'calls') {
     const measured = setterClients(clients).map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null }));
     const detailClient = callsClient ? clients.find(c => c.client_id === callsClient) : undefined;
-    if (ctab === 'shifts') {
-      // The Shifts tab's CALENDAR always shows one whole month — the month the picker's end
-      // date falls in — while its cards, attention panel and table follow the picker. So
-      // load the union: from whichever starts earlier, to the end of that month.
-      const cm = calendarMonth(range.until);
-      callsShifts = await getShiftScorecard(measured, { ...range, since: range.since < cm.since ? range.since : cm.since, until: cm.until });
-    } else if (detailClient) {
+    if (detailClient) {
       callsDetail = { client: detailClient, speed: await getClientSpeed(detailClient.client_id, range) };
+    } else if (ctab === 'setters') {
+      callsSetters = await getSetterScorecard(measured, range);
     } else {
       const rows = await getClientSpeedRows(measured, range);
       const byId = new Map(clients.map(c => [c.client_id, c]));
@@ -243,7 +217,7 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
   };
 
   return (
-    <>
+    <Fragment key={JSON.stringify(params)}>
       <Topbar
         title={titles[view].title}
         subtitle={titles[view].subtitle}
@@ -278,18 +252,14 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
             selectedFunnelId={selectedFunnel?.id ?? null}
             since={range.since}
             until={range.until}
-            ftab={ftab}
-            optimisations={optimisations}
-            optimisationMonths={optimisationMonths}
-            optimisationMonth={optimisationMonth}
           />
         )}
         {view === 'calls' && (
           <CallTrackingView
             overview={callsOverview}
             detail={callsDetail}
-            shifts={callsShifts}
-            shiftsMonth={calendarMonth(range.until)}
+            setters={callsSetters}
+            clients={clients}
             tab={ctab}
             since={range.since}
             until={range.until}
@@ -318,7 +288,7 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
         {view === 'kpis' && <KpisView rows={kpiRows} months={kpiMonths} month={kpiMonth} daily={kpiDaily} syncAgeHours={kpiSyncAgeHours} speed={kpiSpeed} />}
         {view === 'clients' && <ClientsView clients={adminClients} />}
         {view === 'admin' && <PlaceholderView title="Admin Panel" subtitle="Team, integrations and workspace settings" />}
-    </>
+    </Fragment>
   );
 }
 

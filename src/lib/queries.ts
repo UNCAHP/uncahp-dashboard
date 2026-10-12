@@ -731,22 +731,54 @@ export type FunnelMetrics = {
   deposit_sources: string[];
   setter_sources: string[];
   meta_campaign_count: number;
+  meta: FunnelMeta | null;        // ad-side figures for the mapped campaigns; null when none are mapped
+  daily: FunnelDay[];             // one entry per day of the range, oldest first
+};
+
+// One day of the funnel's GHL results. Sums across the range equal `optins` and `deposits`:
+// an opt-in lands on the day the contact was created, a deposit on the day of that contact's
+// first counted payment in the range (days are UTC, the same boundaries the totals use).
+export type FunnelDay = { date: string; optins: number; deposits: number };
+
+// The Meta Ads side of a funnel: what the mapped campaigns spent and delivered in the range,
+// and what that spend cost per funnel result. The cost-per figures divide Meta spend by the
+// funnel's own GHL opt-ins and deposits (not Meta's pixel-reported leads), so they always
+// agree with the stage counts — and they stay on those GHL counts even when a split test
+// swaps the headline stages to first-party numbers, because spend covers every version.
+export type FunnelMeta = {
+  spend: number;                  // £
+  impressions: number;
+  link_clicks: number;
+  lp_views: number;               // Meta landing_page_view
+  ctr_pct: number | null;         // link clicks ÷ impressions
+  cpc: number | null;             // £ per link click
+  cpm: number | null;             // £ per 1,000 impressions
+  cost_per_lp_view: number | null;
+  cpl: number | null;             // £ per opt-in
+  cost_per_deposit: number | null;
 };
 
 export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): Promise<FunnelMetrics> {
-  // LP views from Meta landing_page_view for the mapped campaigns.
+  // LP views from Meta landing_page_view for the mapped campaigns, plus their spend and
+  // delivery for the Meta Ads panel.
   let lp_views: number | null = null;
+  let ads: { spend: number; impressions: number; link_clicks: number } | null = null;
   if (funnel.meta_campaign_ids.length > 0) {
-    type StatRow = { actions: unknown };
+    type StatRow = { actions: unknown; spend_cents: number | null; impressions: number | null };
     const rows = await fetchAll<StatRow>(() =>
       supabase
         .from('meta_daily_stats')
-        .select('actions')
+        .select('actions, spend_cents, impressions')
         .in('campaign_source_id', funnel.meta_campaign_ids)
         .gte('date', range.since)
         .lte('date', range.until),
     );
     lp_views = rows.reduce((s, r) => s + extractAction(r.actions, 'landing_page_view'), 0);
+    ads = {
+      spend: rows.reduce((s, r) => s + (r.spend_cents ?? 0), 0) / 100,
+      impressions: rows.reduce((s, r) => s + (r.impressions ?? 0), 0),
+      link_clicks: rows.reduce((s, r) => s + extractAction(r.actions, 'link_click'), 0),
+    };
   }
 
   // Opt-ins: contacts carrying ALL the funnel's opt-in tags, CREATED in range. Matches a
@@ -755,19 +787,26 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
   // created in an earlier period is not re-counted here even if it re-engages.
   const need = funnel.optin_tags.map(norm);
   let optins = 0;
+  const optinsByDay = new Map<string, number>();
+  const depositsByDay = new Map<string, number>();
+  const bump = (m: Map<string, number>, iso: string | null | undefined) => {
+    if (!iso) return;
+    const day = iso.slice(0, 10);
+    m.set(day, (m.get(day) ?? 0) + 1);
+  };
   if (need.length > 0) {
-    type ContactRow = { tags: unknown };
+    type ContactRow = { tags: unknown; date_added: string | null };
     const contacts = await fetchAll<ContactRow>(() =>
       supabase
         .from('ghl_contacts')
-        .select('tags')
+        .select('tags, date_added')
         .eq('location_id', funnel.client_id)
         .gte('date_added', `${range.since}T00:00:00Z`)
         .lte('date_added', `${range.until}T23:59:59Z`),
     );
     for (const c of contacts) {
       const t = Array.isArray(c.tags) ? c.tags.map(norm) : [];
-      if (need.every(w => t.includes(w))) optins++;
+      if (need.every(w => t.includes(w))) { optins++; bump(optinsByDay, c.date_added); }
     }
   }
 
@@ -789,11 +828,11 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
   const setterSet = new Set(funnel.setter_sources.map(norm));
   const setterActive = setterSet.size > 0 && need.length > 0;
   if (directSet.size > 0 || setterActive) {
-    type TxnRow = { contact_source_id: string | null; entity_source_name: string | null };
+    type TxnRow = { contact_source_id: string | null; entity_source_name: string | null; charge_created_at: string | null };
     const txns = await fetchAll<TxnRow>(() =>
       supabase
         .from('ghl_transactions')
-        .select('contact_source_id, entity_source_name')
+        .select('contact_source_id, entity_source_name, charge_created_at')
         .eq('location_id', funnel.client_id)
         .eq('status', 'succeeded')
         .gte('charge_created_at', `${range.since}T00:00:00Z`)
@@ -801,11 +840,17 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     );
     const directCounted = new Set<string>();    // direct-source deposits (unconditional)
     const setterPending = new Set<string>();    // setter-source contacts awaiting tag verification
+    // Each contact's earliest payment per kind, so a counted deposit can be placed on a day.
+    const directAt = new Map<string, string>();
+    const setterAt = new Map<string, string>();
+    const earliest = (m: Map<string, string>, id: string, at: string | null) => {
+      if (at && (!m.has(id) || at < m.get(id)!)) m.set(id, at);
+    };
     for (const t of txns) {
       if (!t.contact_source_id) continue;
       const src = norm(t.entity_source_name);
-      if (directSet.has(src)) directCounted.add(t.contact_source_id);
-      else if (setterActive && setterSet.has(src)) setterPending.add(t.contact_source_id);
+      if (directSet.has(src)) { directCounted.add(t.contact_source_id); earliest(directAt, t.contact_source_id, t.charge_created_at); }
+      else if (setterActive && setterSet.has(src)) { setterPending.add(t.contact_source_id); earliest(setterAt, t.contact_source_id, t.charge_created_at); }
     }
 
     // Verify setter-source payers: keep only those carrying ALL the funnel's opt-in tags
@@ -828,10 +873,29 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     }
     deposits_direct = directCounted.size;
     deposits_setter = setterCounted.size;
+    for (const id of directCounted) bump(depositsByDay, directAt.get(id));
+    for (const id of setterCounted) bump(depositsByDay, setterAt.get(id));
   }
   const deposits = deposits_direct + deposits_setter;
 
+  const daily: FunnelDay[] = [];
+  for (let t = Date.parse(`${range.since}T00:00:00Z`), end = Date.parse(`${range.until}T00:00:00Z`); t <= end; t += 86_400_000) {
+    const date = new Date(t).toISOString().slice(0, 10);
+    daily.push({ date, optins: optinsByDay.get(date) ?? 0, deposits: depositsByDay.get(date) ?? 0 });
+  }
+
   const rate = (n: number, d: number | null) => (d && d > 0 ? +((100 * n) / d).toFixed(2) : null);
+  const per = (n: number, d: number | null) => (d && d > 0 ? +(n / d).toFixed(2) : null);
+  const meta: FunnelMeta | null = ads && {
+    ...ads,
+    lp_views: lp_views ?? 0,
+    ctr_pct: rate(ads.link_clicks, ads.impressions),
+    cpc: per(ads.spend, ads.link_clicks),
+    cpm: per(ads.spend * 1000, ads.impressions),
+    cost_per_lp_view: per(ads.spend, lp_views),
+    cpl: per(ads.spend, optins),
+    cost_per_deposit: per(ads.spend, deposits),
+  };
   return {
     funnel_id: funnel.id,
     funnel_name: funnel.name,
@@ -850,6 +914,8 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     deposit_sources: funnel.deposit_sources,
     setter_sources: funnel.setter_sources,
     meta_campaign_count: funnel.meta_campaign_ids.length,
+    meta,
+    daily,
   };
 }
 

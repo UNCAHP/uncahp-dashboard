@@ -1,6 +1,6 @@
 import { Eye, Users, ShoppingCart, CreditCard, CheckCircle2, Calendar as CalIcon, PoundSterling, ChevronRight } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import Link from 'next/link';
+import { NavLink } from '@/components/NavProgress';
 import { cn, formatGBP, formatNumber } from '@/lib/utils';
 
 export type FunnelStripData = {
@@ -51,10 +51,10 @@ export function FunnelStrip({
           <div className="mt-0.5 text-xs text-fg-muted">From landing page view through to revenue</div>
         </div>
         {detailHref && (
-          <Link href={detailHref} prefetch={false} className="flex items-center gap-1 text-xs text-fg-muted hover:text-fg">
+          <NavLink href={detailHref} className="flex items-center gap-1 text-xs text-fg-muted hover:text-fg">
             Open full funnel
             <ChevronRight size={12} />
-          </Link>
+          </NavLink>
         )}
       </div>
       <div className="flex items-stretch gap-2">
@@ -96,7 +96,7 @@ export function FunnelStrip({
               >
                 {stage.hasData && (
                   <div
-                    className="absolute inset-y-0 left-0 transition-all"
+                    className="absolute inset-y-0 left-0 transition-[width] duration-300 ease-(--ease-out)"
                     style={{
                       width: `${width}%`,
                       background: stage.isCurrency

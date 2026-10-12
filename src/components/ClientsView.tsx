@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useState, useTransition } from 'react';
 import {
-  Plus, Pencil, Archive, ArchiveRestore, X, KeyRound, Building2, Loader2, ImageIcon, RefreshCw,
+  Plus, Pencil, Archive, ArchiveRestore, KeyRound, Building2, Loader2, ImageIcon, RefreshCw,
 } from 'lucide-react';
 import type { AdminClientRow } from '@/lib/clientAdmin';
 import { CSR_SETTERS } from '@/lib/csrConstants';
@@ -11,6 +11,9 @@ import {
 } from '@/app/actions/clients';
 import { syncClientAction } from '@/app/actions/sync';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
+import { toast } from 'sonner';
+import { Modal } from '@/components/Modal';
+import { useConfirm } from '@/components/Confirm';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/Tooltip';
 
@@ -52,6 +55,7 @@ export function ClientsView({ clients }: { clients: AdminClientRow[] }) {
       }
     };
     await Promise.all(Array.from({ length: Math.min(3, targets.length) }, worker));
+    (fail ? toast.error : toast.success)(`Synced ${ok} of ${targets.length} clients`, { description: `£${spend.toFixed(0)} spend${fail ? ` · ${fail} failed` : ''}` });
   };
   const syncingAll = !!syncAll && syncAll.done < syncAll.total;
 
@@ -160,28 +164,29 @@ export function ClientsView({ clients }: { clients: AdminClientRow[] }) {
 function ClientRowItem({ client: c, onEdit }: { client: AdminClientRow; onEdit: () => void }) {
   const [pending, startTransition] = useTransition();
   const [syncing, startSync] = useTransition();
-  const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const confirm = useConfirm();
 
   const canSync = !!c.ghl_location_id;
 
-  const toggleStatus = () => {
+  const toggleStatus = async () => {
     const next = c.status === 'active' ? 'archived' : 'active';
-    if (next === 'archived' && !window.confirm(`Archive "${c.client_name}"? They'll move to the Archived tab and can be restored anytime.`)) return;
+    if (next === 'archived' && !(await confirm({ title: `Archive ${c.client_name}?`, body: "They'll move to the Archived tab and can be restored anytime.", confirmLabel: 'Archive' }))) return;
     startTransition(async () => {
-      await setClientStatusAction(c.id, next);
+      const res = await setClientStatusAction(c.id, next);
+      if (res.ok) toast.success(next === 'archived' ? `${c.client_name} archived` : `${c.client_name} restored`);
+      else toast.error(res.error ?? 'Could not update the client');
     });
   };
 
   const doSync = () => {
     if (!c.ghl_location_id) return;
-    setSyncMsg(null);
     startSync(async () => {
       const { meta, ghl } = await syncClientAction(c.ghl_location_id!);
       const parts = [
         meta.ok ? `Meta £${(meta.spend_gbp ?? 0).toFixed(0)} · ${meta.lp_views ?? 0} LP` : `Meta failed: ${meta.error ?? '?'}`,
         ghl.ok ? `GHL ${ghl.contacts ?? 0} contacts · ${ghl.transactions ?? 0} txns` : `GHL failed: ${ghl.error ?? '?'}`,
       ];
-      setSyncMsg({ ok: meta.ok && ghl.ok, text: parts.join('  ·  ') });
+      (meta.ok && ghl.ok ? toast.success : toast.error)(`${c.client_name} ${meta.ok && ghl.ok ? 'synced' : 'sync failed'}`, { description: parts.join('  ·  ') });
     });
   };
 
@@ -233,14 +238,6 @@ function ClientRowItem({ client: c, onEdit }: { client: AdminClientRow; onEdit: 
       <td className="px-5 py-3.5 text-xs text-fg-muted">{formatDate(c.created_at)}</td>
       <td className="px-5 py-3.5">
         <div className="flex items-center justify-end gap-1">
-          {syncMsg && (
-            <span
-              className={cn('mr-1 max-w-[240px] truncate text-[11px]', syncMsg.ok ? 'text-green' : 'text-red')}
-              title={syncMsg.text}
-            >
-              {syncMsg.text}
-            </span>
-          )}
           <button
             onClick={doSync}
             disabled={syncing || !canSync}
@@ -294,33 +291,14 @@ function ClientFormModal({
 
   // Close automatically once the action succeeds.
   useEffect(() => {
-    if (state.ok) onClose();
-  }, [state.ok, onClose]);
-
-  // Close on Escape.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    if (!state.ok) return;
+    toast.success(mode === 'create' ? 'Client added' : 'Client saved');
+    onClose();
+  }, [state.ok, onClose, mode]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/70" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-lg rounded-2xl border border-border bg-surface shadow-2xl">
-        <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pink/10">
-              <Building2 size={16} className="text-pink" />
-            </div>
-            <h2 className="text-base font-semibold text-fg">{mode === 'create' ? 'Add client' : 'Edit client'}</h2>
-          </div>
-          <button onClick={onClose} className="text-fg-muted hover:text-fg" aria-label="Close">
-            <X size={18} />
-          </button>
-        </div>
-
-        <form action={formAction} className="space-y-4 px-6 py-5">
+    <Modal title={mode === 'create' ? 'Add client' : 'Edit client'} icon={Building2} size="lg" onClose={onClose}>
+        <form action={formAction} className="space-y-4">
           {mode === 'edit' && <input type="hidden" name="id" value={initial!.id} />}
 
           <div className="flex items-start gap-4">
@@ -434,8 +412,7 @@ function ClientFormModal({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

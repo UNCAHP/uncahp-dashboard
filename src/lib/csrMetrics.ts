@@ -311,8 +311,7 @@ export async function getClientSpeedRows(clients: ClientAssign[], range: DateRan
   return [...by.values()];
 }
 
-// ─── Shifts scorecard: one row per setter per day ────────────────────────────
-
+// One setter's check-in for one day, with the leads they answered for that day.
 export type ShiftRow = {
   date: string;
   csr: string;
@@ -327,49 +326,87 @@ export type ShiftRow = {
   coverLeads: number; // ...of which came from covering someone else's client
 };
 
-export type ShiftScorecard = {
-  days: { date: string; rows: ShiftRow[] }[];   // newest first
-  setters: { csr: string; shifts: number; leads: number; attempted: number; connected: number; neverCalled: number; pct: number | null }[];
+// ─── Setters scorecard: one block per setter, across every client they answered for ──
+
+export type SetterClientRow = {
+  client_id: string;
+  cover: boolean;     // a colleague's client this setter covered, not one of their own
+  leads: number;
+  attempted: number;
+  connected: number;
+  neverCalled: number;
+  pct: number | null;
 };
 
-export async function getShiftScorecard(clients: ClientAssign[], range: DateRange): Promise<ShiftScorecard> {
-  const [shifts, leads] = await Promise.all([getShifts(range), evaluateLeads(clients, range)]);
+export type SetterCard = {
+  csr: string;
+  shifts: number;               // days on shift in the range
+  leads: number;                // leads they were responsible for (own clients + cover)
+  attempted: number;
+  connected: number;
+  neverCalled: number;
+  selfBooked: number;
+  pct: number | null;
+  medianMinutes: number | null; // median minutes to first dial, of the leads that got one
+  clients: SetterClientRow[];   // assigned clients first (even with no leads), then cover
+  days: ShiftRow[];             // one per check-in in the range, oldest first
+};
 
-  const rows = new Map<string, ShiftRow>(); // `${date}|${csr}`
+export async function getSetterScorecard(clients: ClientAssign[], range: DateRange): Promise<SetterCard[]> {
+  const [shifts, leads] = await Promise.all([getShifts(range), evaluateLeads(clients, range)]);
+  const pctOf = (n: number, d: number) => (d ? +((100 * n) / d).toFixed(1) : null);
+
+  type Acc = SetterCard & { mins: number[]; byClient: Map<string, SetterClientRow>; byDay: Map<string, ShiftRow> };
+  const acc = new Map<string, Acc>();
+  const get = (csr: string): Acc => {
+    let a = acc.get(csr);
+    if (!a) {
+      a = { csr, shifts: 0, leads: 0, attempted: 0, connected: 0, neverCalled: 0, selfBooked: 0, pct: null, medianMinutes: null, clients: [], days: [], mins: [], byClient: new Map(), byDay: new Map() };
+      acc.set(csr, a);
+    }
+    return a;
+  };
+  const clientRow = (a: Acc, client_id: string, cover: boolean): SetterClientRow => {
+    let r = a.byClient.get(client_id);
+    if (!r) { r = { client_id, cover, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null }; a.byClient.set(client_id, r); }
+    return r;
+  };
+
+  // Every tracked setter with an assignment or a check-in appears, even with no leads.
+  for (const c of clients) if (c.csr && isTrackedSetter(c.csr)) clientRow(get(c.csr), c.client_id, false);
   for (const s of shifts) {
     if (!isTrackedSetter(s.csr)) continue;
-    rows.set(`${s.date}|${s.csr}`, { date: s.date, csr: s.csr, start: s.start, end: s.end, off: s.off, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null, coverLeads: 0 });
+    const a = get(s.csr);
+    if (!s.off) a.shifts++;
+    a.byDay.set(s.date, { date: s.date, csr: s.csr, start: s.start, end: s.end, off: s.off, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null, coverLeads: 0 });
   }
+
   for (const l of leads) {
-    if (l.selfBooked) continue;
-    const r = rows.get(`${l.day}|${l.responsible}`);
-    if (!r) continue;
-    r.leads++;
-    if (l.attempted) r.attempted++;
-    if (l.connected) r.connected++;
-    if (!l.firstDialBy) r.neverCalled++;
-    if (l.cover) r.coverLeads++;
+    const a = get(l.responsible);
+    if (l.selfBooked) { a.selfBooked++; continue; }
+    const targets = [a, clientRow(a, l.client_id, l.cover), a.byDay.get(l.day)];
+    for (const t of targets) {
+      if (!t) continue;
+      t.leads++;
+      if (l.attempted) t.attempted++;
+      if (l.connected) t.connected++;
+      if (!l.firstDialBy) t.neverCalled++;
+    }
+    const day = a.byDay.get(l.day);
+    if (day && l.cover) day.coverLeads++;
+    if (l.minsToDial != null) a.mins.push(l.minsToDial);
   }
-  for (const r of rows.values()) r.pct = r.leads ? +((100 * r.attempted) / r.leads).toFixed(1) : null;
 
-  const byDate = new Map<string, ShiftRow[]>();
-  for (const r of rows.values()) {
-    const l = byDate.get(r.date) ?? [];
-    l.push(r);
-    byDate.set(r.date, l);
-  }
-  const days = [...byDate.entries()]
-    .sort((a, b) => b[0].localeCompare(a[0]))
-    .map(([date, list]) => ({ date, rows: list.sort((a, b) => Number(a.off) - Number(b.off) || a.start.localeCompare(b.start) || a.csr.localeCompare(b.csr)) }));
-
-  const setters = new Map<string, ShiftScorecard['setters'][number]>();
-  for (const r of rows.values()) {
-    const s = setters.get(r.csr) ?? { csr: r.csr, shifts: 0, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null };
-    if (!r.off) s.shifts++;
-    s.leads += r.leads; s.attempted += r.attempted; s.connected += r.connected; s.neverCalled += r.neverCalled;
-    setters.set(r.csr, s);
-  }
-  for (const s of setters.values()) s.pct = s.leads ? +((100 * s.attempted) / s.leads).toFixed(1) : null;
-
-  return { days, setters: [...setters.values()].sort((a, b) => b.leads - a.leads) };
+  return [...acc.values()].map(a => {
+    const sorted = [...a.mins].sort((x, y) => x - y);
+    const clientRows = [...a.byClient.values()].map(r => ({ ...r, pct: pctOf(r.attempted, r.leads) }))
+      .sort((x, y) => Number(x.cover) - Number(y.cover) || y.leads - x.leads);
+    const days = [...a.byDay.values()].map(r => ({ ...r, pct: pctOf(r.attempted, r.leads) })).sort((x, y) => x.date.localeCompare(y.date));
+    return {
+      csr: a.csr, shifts: a.shifts, leads: a.leads, attempted: a.attempted, connected: a.connected, neverCalled: a.neverCalled, selfBooked: a.selfBooked,
+      pct: pctOf(a.attempted, a.leads),
+      medianMinutes: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
+      clients: clientRows, days,
+    };
+  }).sort((x, y) => y.leads - x.leads || x.csr.localeCompare(y.csr));
 }

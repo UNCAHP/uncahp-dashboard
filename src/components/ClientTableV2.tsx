@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
+import { NavLink } from '@/components/NavProgress';
 import type { ClientRow } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn, formatGBP, formatNumber, formatPercent } from '@/lib/utils';
@@ -96,9 +96,8 @@ export function ClientTableV2({ rows, since, until }: { rows: ClientRow[]; since
               sorted.map(r => (
                 <tr key={r.client_id} className="group border-b border-border/50 transition-colors last:border-0 hover:bg-surface-2">
                   <td className="px-5 py-3.5">
-                    <Link
+                    <NavLink
                       href={`/?view=client&client=${r.client_id}&since=${since}&until=${until}`}
-                      prefetch={false}
                       className="flex items-center gap-2.5"
                     >
                       {r.logo_url ? (
@@ -115,7 +114,7 @@ export function ClientTableV2({ rows, since, until }: { rows: ClientRow[]; since
                       <span className="text-sm text-fg group-hover:text-pink-soft">
                         {r.client_name || r.client_id}
                       </span>
-                    </Link>
+                    </NavLink>
                   </td>
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-fg">{formatGBP(r.spend_gbp, { decimals: 2 })}</td>
                   <td className="px-5 py-3.5 text-right font-mono text-sm tabular-nums text-fg">{formatNumber(r.leads)}</td>

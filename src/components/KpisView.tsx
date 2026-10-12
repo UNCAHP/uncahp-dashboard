@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useNav } from '@/components/NavProgress';
 import { Fragment, useState } from 'react';
 import { Headphones, Megaphone, FlaskConical, Target, ChevronRight, Phone, MessageSquare, Zap } from 'lucide-react';
 import type { CsrKpiRow, CsrDayRow, CsrSpeedRow } from '@/lib/kpis';
@@ -32,8 +32,8 @@ export function KpisView({ rows, months, month, daily, syncAgeHours, speed }: {
   syncAgeHours: number | null;
   speed: CsrSpeedRow[];
 }) {
-  const router = useRouter();
-  const goMonth = (m: string) => router.push(`/?view=kpis&month=${encodeURIComponent(m)}`);
+  const { navigate: go } = useNav();
+  const goMonth = (m: string) => go(`/?view=kpis&month=${encodeURIComponent(m)}`);
   // Several setters can be open at once, so their days can be compared side by side.
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const toggle = (csr: string) => setOpen(o => ({ ...o, [csr]: !o[csr] }));

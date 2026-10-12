@@ -59,6 +59,16 @@ async function getMessages(url: string, key: string): Promise<Record<string, unk
   return j; // still 401 after 3 tries → caller can treat it as a genuine scope gap
 }
 
+// How far back a routine sync should look. A client with no calls on file yet — newly
+// enrolled, or never synced — gets the full backfill; without it every lead from before
+// enrolment reads as "never phoned", because the daily window never reaches back to them.
+export const CALLS_BACKFILL_DAYS = 30;
+export async function callsWindowDays(locationId: string, routineDays: number): Promise<number> {
+  const { count, error } = await supabaseAdmin
+    .from('csr_calls').select('source_id', { count: 'exact', head: true }).eq('location_id', locationId);
+  return !error && (count ?? 0) === 0 ? Math.max(routineDays, CALLS_BACKFILL_DAYS) : routineDays;
+}
+
 export async function syncClientCalls(locationId: string, days = 30): Promise<CallsSyncResult> {
   if (!locationId) return { ok: false, error: 'Missing client id.' };
 

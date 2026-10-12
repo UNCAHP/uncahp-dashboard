@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useNav } from '@/components/NavProgress';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -56,7 +56,7 @@ type Props = {
 };
 
 export function DateRangePicker({ since, until, view, client, funnel }: Props) {
-  const router = useRouter();
+  const { navigate: go } = useNav();
   const [open, setOpen] = useState(false);
   const [start, setStart] = useState<Date | null>(parse(since));
   const [end, setEnd] = useState<Date | null>(parse(until));
@@ -102,8 +102,8 @@ export function DateRangePicker({ since, until, view, client, funnel }: Props) {
   function apply() {
     if (!start || !end) return;
     // Start from the current URL so page state the picker doesn't know about survives a
-    // date change — the Call Tracking tab (ctab), the Funnel Analytics tab (ftab), the
-    // active/inactive filter (fstatus). Only the range itself is replaced.
+    // date change — the Call Tracking tab (ctab) and the active/inactive
+    // funnel filter (fstatus). Only the range itself is replaced.
     const p = new URLSearchParams(window.location.search);
     if (view && view !== 'overview') p.set('view', view); else p.delete('view');
     if (client) p.set('client', client); else p.delete('client');
@@ -111,7 +111,7 @@ export function DateRangePicker({ since, until, view, client, funnel }: Props) {
     p.delete('days');
     p.set('since', iso(start));
     p.set('until', iso(end));
-    router.push(`/?${p.toString()}`);
+    go(`/?${p.toString()}`);
     setOpen(false);
   }
 
@@ -129,7 +129,7 @@ export function DateRangePicker({ since, until, view, client, funnel }: Props) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 flex overflow-hidden rounded-xl border border-border-strong bg-surface shadow-2xl shadow-black/60">
+        <div className="pop absolute right-0 top-full z-50 mt-2 flex overflow-hidden rounded-xl border border-border-strong bg-surface shadow-2xl shadow-black/60">
           {/* Presets */}
           <div className="w-36 shrink-0 border-r border-border py-2">
             {PRESETS.map(p => (

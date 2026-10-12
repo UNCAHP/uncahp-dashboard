@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import { NavLink, useNav } from '@/components/NavProgress';
 import { useState } from 'react';
 import { LayoutGrid, BarChart3, FlaskConical, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
@@ -51,10 +51,16 @@ export function Sidebar({
 
   const filtered = clients.filter(c => c.client_name.toLowerCase().includes(search.toLowerCase()));
 
+  // The clicked item lights up at once, while its page is still loading.
+  const { target } = useNav();
+  const navHrefs = NAV.map(item => buildHref({ view: item.id, client: item.id === 'client' ? selectedClient : undefined, since, until }));
+  const clientHref = (id: string) => buildHref({ view: 'client', client: id, since, until });
+  const jumping = !!target && (navHrefs.includes(target) || clients.some(c => clientHref(c.client_id) === target));
+
   return (
     <aside
       className={cn(
-        'sticky top-0 flex h-screen shrink-0 flex-col border-r border-border bg-bg transition-all duration-200',
+        'sticky top-0 flex h-screen shrink-0 flex-col border-r border-border bg-bg transition-[width] duration-200 ease-(--ease-out)',
         collapsed ? 'w-16' : 'w-64',
       )}
     >
@@ -92,18 +98,17 @@ export function Sidebar({
       <nav className="space-y-1 p-3">
         {NAV.map(item => {
           const Icon = item.icon;
-          const active = view === item.id;
           const href = buildHref({
             view: item.id,
             client: item.id === 'client' ? selectedClient : undefined,
             since,
             until,
           });
+          const active = jumping ? target === href : view === item.id;
           return (
-            <Link
+            <NavLink
               key={item.id}
               href={href}
-              prefetch={false}
               className={cn(
                 'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
                 active ? 'bg-pink text-black' : 'text-fg hover:bg-surface hover:text-pink',
@@ -111,7 +116,7 @@ export function Sidebar({
             >
               <Icon size={16} className="shrink-0" />
               {!collapsed && <span>{item.label}</span>}
-            </Link>
+            </NavLink>
           );
         })}
       </nav>
@@ -135,12 +140,12 @@ export function Sidebar({
 
           <div className="flex-1 space-y-0.5 overflow-y-auto px-3 pb-3">
             {filtered.map(c => {
-              const active = view === 'client' && selectedClient === c.client_id;
+              const href = clientHref(c.client_id);
+              const active = jumping ? target === href : view === 'client' && selectedClient === c.client_id;
               return (
-                <Link
+                <NavLink
                   key={c.client_id}
-                  href={buildHref({ view: 'client', client: c.client_id, since, until })}
-                  prefetch={false}
+                  href={href}
                   className={cn(
                     'flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-xs font-medium transition-colors',
                     active ? 'bg-pink text-black' : 'text-fg hover:bg-surface/60 hover:text-pink',
@@ -158,7 +163,7 @@ export function Sidebar({
                     </div>
                   )}
                   <Tooltip label={c.client_name} className="text-left">{c.client_name}</Tooltip>
-                </Link>
+                </NavLink>
               );
             })}
             {filtered.length === 0 && (

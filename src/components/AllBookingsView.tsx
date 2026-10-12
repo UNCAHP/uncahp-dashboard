@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
+import { useNav } from '@/components/NavProgress';
 import { Loader2, Search, ClipboardList } from 'lucide-react';
 import type { Booking, BookingChannel } from '@/lib/bookingsAdmin';
 import type { ClientOption } from '@/lib/queries';
@@ -30,10 +30,10 @@ export function AllBookingsView({
   clientId: string; // 'all' in this view
   month: string | null;
 }) {
-  const router = useRouter();
+  const { navigate: go } = useNav();
   const [search, setSearch] = useState('');
-  const goMonth = (m: string) => router.push(`/?view=bookings&month=${encodeURIComponent(m)}`);
-  const goClient = (id: string) => router.push(id === 'all' ? '/?view=bookings' : `/?view=bookings&client=${encodeURIComponent(id)}`);
+  const goMonth = (m: string) => go(`/?view=bookings&month=${encodeURIComponent(m)}`);
+  const goClient = (id: string) => go(id === 'all' ? '/?view=bookings' : `/?view=bookings&client=${encodeURIComponent(id)}`);
 
   const clientById = useMemo(() => new Map(clients.map(c => [c.client_id, c])), [clients]);
   const nameOf = (id: string) => clientById.get(id)?.client_name ?? id;

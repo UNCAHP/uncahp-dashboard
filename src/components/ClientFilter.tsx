@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
+import { useNav } from '@/components/NavProgress';
 import { ChevronDown, X } from 'lucide-react';
 import { ClientOption } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
 export function ClientFilter({ clients, activeClientId }: { clients: ClientOption[]; activeClientId?: string }) {
-  const router = useRouter();
+  const { navigate: go } = useNav();
   const params = useSearchParams();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -30,7 +31,7 @@ export function ClientFilter({ clients, activeClientId }: { clients: ClientOptio
     const next = new URLSearchParams(params.toString());
     if (clientId) next.set('client', clientId);
     else next.delete('client');
-    router.push(next.toString() ? `/?${next.toString()}` : '/');
+    go(next.toString() ? `/?${next.toString()}` : '/');
     setOpen(false);
     setSearch('');
   }
@@ -64,7 +65,7 @@ export function ClientFilter({ clients, activeClientId }: { clients: ClientOptio
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-64 rounded-lg border border-border bg-surface shadow-2xl">
+        <div className="pop absolute right-0 top-full z-50 mt-2 w-64 rounded-lg border border-border bg-surface shadow-2xl">
           <div className="border-b border-border p-2">
             <input
               ref={inputRef}

@@ -191,7 +191,7 @@ export function CampaignExplorer({ campaigns }: { campaigns: CampaignNode[] }) {
             Columns
           </button>
           {colsOpen && (
-            <div className="absolute right-0 top-full z-40 mt-2 w-72 rounded-xl border border-border-strong bg-surface p-3 shadow-2xl shadow-black/60">
+            <div className="pop absolute right-0 top-full z-40 mt-2 w-72 rounded-xl border border-border-strong bg-surface p-3 shadow-2xl shadow-black/60">
               <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-fg-dim">Presets</div>
               <div className="mb-3 flex flex-wrap gap-1.5">
                 {BUILT_IN_PRESETS.map(p => (

@@ -1,8 +1,11 @@
 'use client';
 
 import { useActionState, useEffect, useMemo, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
-import { Plus, X, Loader2, CalendarCheck, CalendarDays, List, Trash2, Pencil, Check } from 'lucide-react';
+import { useNav } from '@/components/NavProgress';
+import { Plus, Loader2, CalendarCheck, CalendarDays, List, Trash2, Pencil, Check } from 'lucide-react';
+import { toast } from 'sonner';
+import { Modal } from '@/components/Modal';
+import { useConfirm } from '@/components/Confirm';
 import type { Booking, BookingMonthCost, BookingChannel } from '@/lib/bookingsAdmin';
 import type { ClientOption } from '@/lib/queries';
 import {
@@ -39,13 +42,13 @@ export function BookingsView({
   clientId: string;
   month: string | null;
 }) {
-  const router = useRouter();
+  const { navigate: go } = useNav();
   const [editing, setEditing] = useState<Booking | 'new' | null>(null);
   const [mode, setMode] = useState<'table' | 'calendar'>('table');
 
-  const goMonth = (m: string) => router.push(`/?view=bookings&client=${encodeURIComponent(clientId)}&month=${encodeURIComponent(m)}`);
+  const goMonth = (m: string) => go(`/?view=bookings&client=${encodeURIComponent(clientId)}&month=${encodeURIComponent(m)}`);
   // Switching client resets the month so it defaults to that client's latest; 'all' → overview.
-  const goClient = (id: string) => router.push(id === 'all' ? '/?view=bookings' : `/?view=bookings&client=${encodeURIComponent(id)}`);
+  const goClient = (id: string) => go(id === 'all' ? '/?view=bookings' : `/?view=bookings&client=${encodeURIComponent(id)}`);
 
   const totals = useMemo(() => {
     const deposits = bookings.reduce((n, b) => n + (b.deposit_gbp ?? 0), 0);
@@ -218,7 +221,7 @@ function ChannelCell({ id, value }: { id: string; value: BookingChannel | null }
   const [pending, start] = useTransition();
   const onChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const v = e.target.value === '' ? null : (e.target.value as BookingChannel);
-    start(async () => { await setBookingChannel(id, v); });
+    start(async () => { const res = await setBookingChannel(id, v); if (!res.ok) toast.error(res.error ?? 'Could not save the channel'); });
   };
   return (
     <select value={value ?? ''} onChange={onChange} disabled={pending}
@@ -233,9 +236,14 @@ function ChannelCell({ id, value }: { id: string; value: BookingChannel | null }
 
 function BookingRow({ b, onEdit }: { b: Booking; onEdit: () => void }) {
   const [pending, start] = useTransition();
-  const onDelete = () => {
-    if (!window.confirm(`Delete ${b.patient_name ?? 'this booking'}? This can't be undone.`)) return;
-    start(async () => { await deleteBooking(b.id); });
+  const confirm = useConfirm();
+  const onDelete = async () => {
+    if (!(await confirm({ title: `Delete ${b.patient_name ?? 'this booking'}?`, body: "This can't be undone.", confirmLabel: 'Delete', danger: true }))) return;
+    start(async () => {
+      const res = await deleteBooking(b.id);
+      if (res.ok) toast.success('Booking deleted');
+      else toast.error(res.error ?? 'Could not delete the booking');
+    });
   };
   return (
     <tr className={cn('border-b border-border/50 last:border-0', pending && 'opacity-50')}>
@@ -362,7 +370,7 @@ function BookingFormModal({
   const [state, formAction, pending] = useActionState<ActionState, FormData>(action, { ok: false });
   const monthValue = (initial?.period_month ?? defaultMonth ?? '').slice(0, 7); // yyyy-mm for <input type=month>
 
-  useEffect(() => { if (state.ok) onClose(); }, [state.ok, onClose]);
+  useEffect(() => { if (state.ok) { toast.success(initial ? 'Booking saved' : 'Booking added'); onClose(); } }, [state.ok, onClose, initial]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -370,7 +378,7 @@ function BookingFormModal({
   }, [onClose]);
 
   return (
-    <Modal title={initial ? 'Edit booking' : 'Add booking'} onClose={onClose}>
+    <Modal icon={CalendarCheck} title={initial ? 'Edit booking' : 'Add booking'} onClose={onClose}>
       <form action={formAction} className="space-y-4">
         {initial && <input type="hidden" name="id" value={initial.id} />}
         <input type="hidden" name="client_id" value={clientId} />
@@ -430,27 +438,6 @@ function BookingFormModal({
         </div>
       </form>
     </Modal>
-  );
-}
-
-// ─── Shared modal chrome ─────────────────────────────────────────────────────
-
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70" onClick={onClose}>
-      <div className="flex min-h-full items-center justify-center p-4">
-        <div onClick={e => e.stopPropagation()} className="w-full max-w-2xl rounded-2xl border border-border bg-surface shadow-2xl">
-          <div className="flex items-center justify-between border-b border-border px-6 py-4">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pink/10"><CalendarCheck size={16} className="text-pink" /></div>
-              <h2 className="text-base font-semibold text-fg">{title}</h2>
-            </div>
-            <button onClick={onClose} className="text-fg-muted hover:text-fg" aria-label="Close"><X size={18} /></button>
-          </div>
-          <div className="px-6 py-5">{children}</div>
-        </div>
-      </div>
-    </div>
   );
 }
 

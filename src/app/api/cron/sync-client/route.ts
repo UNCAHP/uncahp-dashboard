@@ -1,6 +1,6 @@
 import { syncClientMeta, type MetaSyncResult } from '@/lib/metaSync';
 import { syncClientGhl, type GhlSyncResult } from '@/lib/ghlSync';
-import { syncClientCalls, type CallsSyncResult } from '@/lib/callsSync';
+import { syncClientCalls, callsWindowDays, type CallsSyncResult } from '@/lib/callsSync';
 
 // Syncs ONE client's Meta ads + GHL contacts/transactions + recent calls — all together.
 // Invoked (fanned out) by the daily dispatcher, one invocation per client, so each gets
@@ -10,7 +10,9 @@ import { syncClientCalls, type CallsSyncResult } from '@/lib/callsSync';
 export const maxDuration = 800;
 export const dynamic = 'force-dynamic';
 
-const CALLS_WINDOW_DAYS = 3; // calls use a short rolling window; Meta/GHL pull their own ranges
+// Calls use a short rolling window; Meta/GHL pull their own ranges. A client with no calls
+// on file yet gets the full backfill instead (see callsWindowDays).
+const CALLS_WINDOW_DAYS = 3;
 
 export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET;
@@ -23,7 +25,7 @@ export async function GET(req: Request) {
   const [meta, ghl, calls] = await Promise.all([
     syncClientMeta(loc).catch((e): MetaSyncResult => ({ ok: false, error: e instanceof Error ? e.message : 'meta error' })),
     syncClientGhl(loc).catch((e): GhlSyncResult => ({ ok: false, error: e instanceof Error ? e.message : 'ghl error' })),
-    syncClientCalls(loc, CALLS_WINDOW_DAYS).catch((e): CallsSyncResult => ({ ok: false, error: e instanceof Error ? e.message : 'calls error' })),
+    callsWindowDays(loc, CALLS_WINDOW_DAYS).then(days => syncClientCalls(loc, days)).catch((e): CallsSyncResult => ({ ok: false, error: e instanceof Error ? e.message : 'calls error' })),
   ]);
 
   return Response.json({ ok: meta.ok || ghl.ok || calls.ok, meta, ghl, calls });

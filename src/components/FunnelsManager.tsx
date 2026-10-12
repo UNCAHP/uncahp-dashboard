@@ -5,6 +5,8 @@ import { Plus, X, Loader2, FlaskConical, Trash2, Link2, SplitSquareHorizontal, C
 import type { ClientOption } from '@/lib/queries';
 import type { AdminFunnel, FunnelPageLink, FunnelVariant, TagOption, CampaignOption, SourceOption } from '@/lib/funnelAdmin';
 import { createFunnelAction, updateFunnelAction, loadFunnelFormData, type ActionState } from '@/app/actions/funnels';
+import { toast } from 'sonner';
+import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/utils';
 
 const inputCls =
@@ -81,7 +83,7 @@ export function FunnelFormModal({
     });
   }, [clientId]);
 
-  useEffect(() => { if (state.ok) onClose(); }, [state.ok, onClose]);
+  useEffect(() => { if (state.ok) { toast.success('Funnel saved'); onClose(); } }, [state.ok, onClose]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -96,7 +98,7 @@ export function FunnelFormModal({
   const removePage = (i: number) => setPages(cur => cur.filter((_, idx) => idx !== i));
 
   return (
-    <Modal title={initial ? 'Edit funnel' : 'Add funnel'} onClose={onClose}>
+    <Modal icon={FlaskConical} title={initial ? 'Edit funnel' : 'Add funnel'} onClose={onClose}>
       <form action={formAction} className="space-y-4">
         {initial && <input type="hidden" name="id" value={initial.id} />}
         <input type="hidden" name="client_id" value={clientId} />
@@ -419,25 +421,6 @@ function SourceMultiSelect({
           />
         </div>
       )}
-    </div>
-  );
-}
-
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70" onClick={onClose}>
-      <div className="flex min-h-full items-center justify-center p-4">
-        <div onClick={e => e.stopPropagation()} className="w-full max-w-2xl rounded-2xl border border-border bg-surface shadow-2xl">
-          <div className="flex items-center justify-between border-b border-border px-6 py-4">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pink/10"><FlaskConical size={16} className="text-pink" /></div>
-              <h2 className="text-base font-semibold text-fg">{title}</h2>
-            </div>
-            <button onClick={onClose} className="text-fg-muted hover:text-fg" aria-label="Close"><X size={18} /></button>
-          </div>
-          <div className="px-6 py-5">{children}</div>
-        </div>
-      </div>
     </div>
   );
 }

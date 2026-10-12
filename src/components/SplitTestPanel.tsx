@@ -2,6 +2,8 @@
 
 import { useState, type ReactNode } from 'react';
 import { Trophy, Copy, Check, SplitSquareHorizontal, Info, Radio, Gauge, Hourglass } from 'lucide-react';
+import { toast } from 'sonner';
+import { useConfirm } from '@/components/Confirm';
 import { setSplitTestStatus, declareSplitWinner, reopenSplitTest } from '@/app/actions/splitTests';
 import type { SplitTest, VariantStat } from '@/lib/splitTests';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
@@ -9,6 +11,13 @@ import { StageFlow, STAGE_ICONS, type Stage } from '@/components/FunnelStages';
 
 // The Split Test panel shown on a funnel's detail view: a verdict + confidence-to-95%
 // read, a head-to-head of each version as its own funnel, and the config to paste.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// '2026-10-04' or an ISO timestamp → '4 Oct 2026'
+const fmtDate = (iso: string): string => {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return `${d} ${MONTHS[m - 1]} ${y}`;
+};
+
 export function SplitTestPanel({ test, baseUrl }: { test: SplitTest; baseUrl: string }) {
   const primaryLabel = test.primaryMetric === 'deposit' ? 'deposit' : 'opt-in';
   const leader = test.variants.find(v => v.key === test.leaderKey);
@@ -25,7 +34,7 @@ export function SplitTestPanel({ test, baseUrl }: { test: SplitTest; baseUrl: st
             <div className="text-sm font-semibold text-fg">Split test</div>
             <div className="text-[11px] text-fg-dim">{decided
               ? 'Winner declared'
-              : `${formatNumber(test.totalViews)} ${test.totalViews === 1 ? 'visitor' : 'visitors'} · comparing ${primaryLabel} rate`}</div>
+              : `${formatNumber(test.totalViews)} ${test.totalViews === 1 ? 'visitor' : 'visitors'} · comparing ${primaryLabel} rate`}{test.firstEventAt && ` · full history since ${fmtDate(test.firstEventAt)}, not date filtered`}</div>
           </div>
         </div>
         {decided ? <DecidedControl funnelId={test.funnelId} /> : <StatusControl funnelId={test.funnelId} status={test.status} />}
@@ -106,18 +115,23 @@ function variantStages(v: VariantStat): Stage[] {
   ];
 }
 
-// Measure-only funnels (no A/B): show the accumulating first-party counts as a Meta backup.
-export function TrackingPanel({ test, baseUrl, metaLpViews }: { test: SplitTest; baseUrl: string; metaLpViews: number | null }) {
-  const views = test.totalViews;
-  const optins = test.variants.reduce((s, v) => s + v.optins, 0);
-  const deposits = test.variants.reduce((s, v) => s + v.deposits, 0);
+// Measure-only funnels (no A/B): the first-party counts. Beside a funnel with Meta campaigns
+// they're a backup to compare against Meta; with none mapped (`primary`) they ARE the
+// funnel's numbers, so there's nothing to compare and no "backup" label.
+export function TrackingPanel({ test, baseUrl, metaLpViews, primary = false, since, until }: { test: SplitTest; baseUrl: string; metaLpViews: number | null; primary?: boolean; since: string; until: string }) {
+  // Counts follow the dashboard's date range, so they sit beside Meta's figure for the
+  // same dates. Falls back to the whole history if the loader gave no range.
+  const all = { views: test.totalViews, optins: test.variants.reduce((s, v) => s + v.optins, 0), deposits: test.variants.reduce((s, v) => s + v.deposits, 0) };
+  const { views, optins, deposits } = test.ranged ?? all;
+  const rangeLabel = since === until ? fmtDate(since) : `${fmtDate(since)} – ${fmtDate(until)}`;
+  const beforeTracking = !!test.firstEventAt && until < test.firstEventAt.slice(0, 10);
   return (
     <div className="rounded-2xl border border-border bg-surface p-6">
       <div className="mb-4 flex items-center gap-2.5">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pink/10"><Radio size={16} className="text-pink" /></div>
         <div>
-          <div className="text-sm font-semibold text-fg">First-party tracking <span className="ml-1 rounded bg-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-fg-dim">backup</span></div>
-          <div className="text-[11px] text-fg-dim">Recorded directly from the funnel — building history to eventually replace Meta&apos;s numbers.</div>
+          <div className="text-sm font-semibold text-fg">First-party tracking {!primary && <span className="ml-1 rounded bg-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-fg-dim">backup</span>}</div>
+          <div className="text-[11px] text-fg-dim">Recorded directly from the funnel · {test.ranged ? rangeLabel : 'all time'}{test.firstEventAt && ` · tracking since ${fmtDate(test.firstEventAt)}`}</div>
         </div>
       </div>
 
@@ -130,9 +144,15 @@ export function TrackingPanel({ test, baseUrl, metaLpViews }: { test: SplitTest;
       <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-bg px-3.5 py-2.5 text-xs text-fg-muted">
         <Info size={15} className="mt-px shrink-0" />
         <span>
-          {views === 0
+          {all.views === 0
             ? 'No visits recorded yet — paste the snippet below and first-party data will start building here.'
-            : <>Meta currently reports <span className="font-semibold text-fg">{metaLpViews == null ? '—' : formatNumber(metaLpViews)}</span> LP views for this funnel; you&apos;ve recorded <span className="font-semibold text-fg">{formatNumber(views)}</span> first-party. They won&apos;t match exactly — that&apos;s expected. Let it build over the coming months, then switch this funnel&apos;s source over.</>}
+            : beforeTracking
+            ? `These dates are before tracking started on ${fmtDate(test.firstEventAt!)}, so nothing was being recorded yet.`
+            : views === 0
+            ? 'No visits recorded in these dates.'
+            : primary
+            ? 'This funnel has no Meta campaigns mapped, so these first-party counts are its numbers above.'
+            : <>Meta reports <span className="font-semibold text-fg">{metaLpViews == null ? '—' : formatNumber(metaLpViews)}</span> LP views for these dates; you&apos;ve recorded <span className="font-semibold text-fg">{formatNumber(views)}</span> first-party. They won&apos;t match exactly — that&apos;s expected. Let it build over the coming months, then switch this funnel&apos;s source over.</>}
         </span>
       </div>
 
@@ -237,11 +257,14 @@ function VersionColumn({ v, funnelId, isWinner, isLeader, recommended }: { v: Va
 
 function DeclareButton({ funnelId, variantKey, variantLabel, recommended }: { funnelId: string; variantKey: string; variantLabel: string; recommended: boolean }) {
   const [pending, setPending] = useState(false);
+  const confirm = useConfirm();
   const declare = async () => {
-    if (!window.confirm(`Declare ${variantLabel} the winner?\n\nThis ends the test and shows the funnel as a single flow. You can reopen it later.`)) return;
+    if (!(await confirm({ title: `Declare ${variantLabel} the winner?`, body: 'This ends the test and shows the funnel as a single flow. You can reopen it later.', confirmLabel: 'Declare winner' }))) return;
     setPending(true);
-    await declareSplitWinner(funnelId, variantKey);
+    const res = await declareSplitWinner(funnelId, variantKey);
     setPending(false);
+    if (res.ok) toast.success(`${variantLabel} declared the winner`);
+    else toast.error(res.error ?? 'Could not declare the winner');
   };
   return (
     <button

@@ -1,19 +1,21 @@
 'use client';
 
 import { Fragment, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
+import { useNav } from '@/components/NavProgress';
 import { ExternalLink, FlaskConical, SplitSquareHorizontal, ChevronRight, ArrowDown, ArrowRight, ArrowLeft, Plus, Pencil, Archive, ArchiveRestore, Loader2, AlertTriangle, Search, Trash2 } from 'lucide-react';
-import type { ClientOption, FunnelMetrics } from '@/lib/queries';
+import { toast } from 'sonner';
+import { useConfirm } from '@/components/Confirm';
+import type { ClientOption, FunnelMetrics, FunnelMeta } from '@/lib/queries';
 import type { AdminFunnel, FunnelPageLink } from '@/lib/funnelAdmin';
 import type { SplitTest } from '@/lib/splitTests';
-import type { OptimisationEntry } from '@/lib/optimisations';
 import { FunnelFormModal } from '@/components/FunnelsManager';
-import { OptimisationCadence } from '@/components/OptimisationCadence';
 import { SplitTestPanel, TrackingPanel } from '@/components/SplitTestPanel';
 import { StageFlow, STAGE_ICONS, type Stage } from '@/components/FunnelStages';
 import { setFunnelStatusAction, deleteFunnelAction } from '@/app/actions/funnels';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
-import { cn, formatNumber, formatPercent } from '@/lib/utils';
+import { InfoTip } from '@/components/InfoTip';
+import { FunnelDailyChart } from '@/components/FunnelDailyChart';
+import { cn, formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 
 type Props = {
   clients: ClientOption[];
@@ -25,18 +27,12 @@ type Props = {
   selectedFunnelId: string | null;
   since: string;
   until: string;
-  // Optimisation cadence sub-page
-  ftab: 'funnels' | 'cadence';
-  optimisations: OptimisationEntry[];
-  optimisationMonths: string[];
-  optimisationMonth: string | null;
 };
 
 export function FunnelAnalyticsView({
   clients, adminFunnels, metricsList: rawMetricsList, splitTests, baseUrl, funnelStatus, selectedFunnelId, since, until,
-  ftab, optimisations, optimisationMonths, optimisationMonth,
 }: Props) {
-  const router = useRouter();
+  const { navigate: go } = useNav();
   const [editing, setEditing] = useState<AdminFunnel | 'new' | null>(null);
   const [search, setSearch] = useState('');
 
@@ -56,13 +52,7 @@ export function FunnelAnalyticsView({
     if (next.funnel) params.set('funnel', next.funnel);
     const fs = next.fstatus ?? funnelStatus;
     if (fs === 'archived') params.set('fstatus', 'archived');
-    router.push(`/?${params.toString()}`);
-  };
-
-  const goTab = (tab: 'funnels' | 'cadence') => {
-    const params = new URLSearchParams({ view: 'funnel', since, until });
-    if (tab === 'cadence') params.set('ftab', 'cadence');
-    router.push(`/?${params.toString()}`);
+    go(`/?${params.toString()}`);
   };
 
   const detail = selectedFunnelId ? metricsList.find(m => m.funnel_id === selectedFunnelId) ?? null : null;
@@ -113,42 +103,15 @@ export function FunnelAnalyticsView({
             LP views (Meta) → opt-ins → deposits (GHL tags), per registered funnel.
           </p>
         </div>
-        {ftab === 'funnels' && (
-          <button
-            onClick={() => setEditing('new')}
-            className="inline-flex items-center gap-2 rounded-lg bg-pink px-3.5 py-2 text-sm font-semibold text-black transition-colors hover:bg-pink-soft"
-          >
-            <Plus size={16} /> Add funnel
-          </button>
-        )}
+        <button
+          onClick={() => setEditing('new')}
+          className="inline-flex items-center gap-2 rounded-lg bg-pink px-3.5 py-2 text-sm font-semibold text-black transition-colors hover:bg-pink-soft"
+        >
+          <Plus size={16} /> Add funnel
+        </button>
       </div>
 
-      {/* Sub-page tabs. Selecting a funnel drills into it from the Funnels tab, so the
-          tabs stay visible there too — they're how you get back out to the cadence log. */}
-      <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
-        {([['funnels', 'Funnels'], ['cadence', 'Optimisation Cadence']] as const).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => goTab(id)}
-            className={cn('rounded-md px-3 py-1.5 text-xs font-medium transition-colors', ftab === id ? 'bg-pink text-black' : 'text-fg-muted hover:text-fg')}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {ftab === 'cadence' ? (
-        <OptimisationCadence
-          entries={optimisations}
-          funnels={adminFunnels}
-          clients={clients}
-          months={optimisationMonths}
-          month={optimisationMonth}
-          since={since}
-          until={until}
-          splitTests={splitTests}
-        />
-      ) : detail ? (
+      {detail ? (
         <>
           <div className="flex items-center justify-between gap-3">
             <button onClick={() => navigate({})} className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted transition-colors hover:text-pink">
@@ -176,7 +139,7 @@ export function FunnelAnalyticsView({
           {selectedTest ? (
             selectedTest.mode === 'test'
               ? <SplitTestPanel test={selectedTest} baseUrl={baseUrl} />
-              : <TrackingPanel test={selectedTest} baseUrl={baseUrl} metaLpViews={detail?.lp_views ?? null} />
+              : <TrackingPanel test={selectedTest} baseUrl={baseUrl} metaLpViews={detail?.lp_views ?? null} primary={detail.meta_campaign_count === 0} since={since} until={until} />
           ) : selectedAdmin ? (
             <SplitTestSetupCTA onSetup={() => setEditing(selectedAdmin)} />
           ) : null}
@@ -260,9 +223,15 @@ function TotalSum({ label, value, accent }: { label: string; value: string; acce
 function StatusButton({ funnelId, to, onDone }: { funnelId: string; to: 'active' | 'archived'; onDone?: () => void }) {
   const [pending, start] = useTransition();
   const archiving = to === 'archived';
-  const onClick = () => {
-    if (archiving && !window.confirm('Set this funnel to inactive? It will be archived and hidden from the active list — you can reactivate it anytime.')) return;
-    start(async () => { await setFunnelStatusAction(funnelId, to); onDone?.(); });
+  const confirm = useConfirm();
+  const onClick = async () => {
+    if (archiving && !(await confirm({ title: 'Set this funnel to inactive?', body: 'It will be archived and hidden from the active list. You can reactivate it anytime.', confirmLabel: 'Set inactive' }))) return;
+    start(async () => {
+      const res = await setFunnelStatusAction(funnelId, to);
+      if (!res.ok) { toast.error(res.error ?? 'Could not update the funnel'); return; }
+      toast.success(archiving ? 'Funnel set inactive' : 'Funnel set active');
+      onDone?.();
+    });
   };
   return (
     <button
@@ -278,9 +247,15 @@ function StatusButton({ funnelId, to, onDone }: { funnelId: string; to: 'active'
 
 function DeleteButton({ funnelId, funnelName, onDone }: { funnelId: string; funnelName: string; onDone?: () => void }) {
   const [pending, start] = useTransition();
-  const onClick = () => {
-    if (!window.confirm(`Permanently delete "${funnelName}"?\n\nThis removes the funnel from the dashboard for good and cannot be undone. Your GHL and Meta data is not affected — only this funnel's configuration is deleted.\n\nTo just hide it instead, use “Set inactive”.`)) return;
-    start(async () => { await deleteFunnelAction(funnelId); onDone?.(); });
+  const confirm = useConfirm();
+  const onClick = async () => {
+    if (!(await confirm({ title: `Permanently delete ${funnelName}?`, body: `This removes the funnel from the dashboard for good and cannot be undone. Your GHL and Meta data is not affected — only this funnel's configuration is deleted.\n\nTo just hide it instead, use “Set inactive”.`, confirmLabel: 'Delete funnel', danger: true }))) return;
+    start(async () => {
+      const res = await deleteFunnelAction(funnelId);
+      if (!res.ok) { toast.error(res.error ?? 'Could not delete the funnel'); return; }
+      toast.success(`${funnelName} deleted`);
+      onDone?.();
+    });
   };
   return (
     <button
@@ -331,7 +306,7 @@ function Overview({
   const grid = (list: FunnelMetrics[]) => (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {list.map(m => (
-        <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} mode={splitByFunnel.get(m.funnel_id)?.mode} combined={!!splitTotals(splitByFunnel.get(m.funnel_id))} onClick={() => onOpen(m.funnel_id)} />
+        <FunnelSummaryCard key={m.funnel_id} m={m} client={clientInfo.get(m.client_id)} mode={splitByFunnel.get(m.funnel_id)?.mode} combined={splitTotals(splitByFunnel.get(m.funnel_id), m.meta_campaign_count)} onClick={() => onOpen(m.funnel_id)} />
       ))}
     </div>
   );
@@ -365,7 +340,7 @@ function SectionHeading({ icon: Icon, title, count, hint }: { icon: typeof Flask
   );
 }
 
-function FunnelSummaryCard({ m, client, mode, combined, onClick }: { m: FunnelMetrics; client?: ClientOption; mode?: 'measure' | 'test'; combined: boolean; onClick: () => void }) {
+function FunnelSummaryCard({ m, client, mode, combined, onClick }: { m: FunnelMetrics; client?: ClientOption; mode?: 'measure' | 'test'; combined: { winner: string | null } | null; onClick: () => void }) {
   return (
     <button onClick={onClick} className="group flex flex-col rounded-2xl border border-border bg-surface p-5 text-left transition-colors hover:border-border-strong">
       <div className="flex items-start justify-between gap-2">
@@ -393,7 +368,7 @@ function FunnelSummaryCard({ m, client, mode, combined, onClick }: { m: FunnelMe
               ) : null}
             </div>
             <div className="mt-0.5 text-[11px] text-fg-dim">
-              {combined ? 'First-party · all versions' : `${m.meta_campaign_count} campaign${m.meta_campaign_count === 1 ? '' : 's'}`} · {m.pages.length} page{m.pages.length === 1 ? '' : 's'}
+              {combined ? (combined.winner ? `First-party · ${combined.winner}` : mode === 'test' ? 'First-party · all versions' : 'First-party tracking') : `${m.meta_campaign_count} campaign${m.meta_campaign_count === 1 ? '' : 's'}`} · {m.pages.length} page{m.pages.length === 1 ? '' : 's'}
             </div>
           </div>
         </div>
@@ -431,20 +406,34 @@ function Mini({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
-// Combined first-party totals across every version of a running split test, or null when
-// the funnel has no test running (or no visits yet).
-function splitTotals(test?: SplitTest | null) {
-  if (!test || test.mode !== 'test' || test.totalViews === 0) return null;
-  return {
+// First-party totals to show as the funnel's own stage numbers, or null when Meta and GHL
+// should stay the source. First-party takes over in two cases:
+//   • a split test — Meta can't tell the versions' visitors apart, so the combined
+//     first-party counts are the only figures that agree with the test panel;
+//   • a tracked funnel with no Meta campaigns mapped (organic traffic) — there is no Meta
+//     figure at all, so first-party is the only measurement it has.
+// While a test is running the totals are every version combined. Once a winner is declared
+// that version IS the funnel, so its numbers alone become the headline (`winner`).
+function splitTotals(test: SplitTest | null | undefined, metaCampaigns: number) {
+  if (!test || test.totalViews === 0) return null;
+  if (test.mode !== 'test' && metaCampaigns > 0) return null;
+  const won = test.mode === 'test' && test.status === 'decided' ? test.variants.find(v => v.key === test.winnerKey) : undefined;
+  if (won) {
+    const r = test.ranged ? (test.ranged.byVariant[won.key] ?? { views: 0, optins: 0, deposits: 0 }) : { views: won.views, optins: won.optins, deposits: won.deposits };
+    return { ...r, versions: test.variants.length, winner: (won.label || won.key) as string | null };
+  }
+  // Within the dashboard's date range when the loader supplied one; the test's whole
+  // history otherwise.
+  const r = test.ranged ?? {
     views: test.totalViews,
     optins: test.variants.reduce((s, v) => s + v.optins, 0),
     deposits: test.variants.reduce((s, v) => s + v.deposits, 0),
-    versions: test.variants.length,
   };
+  return { views: r.views, optins: r.optins, deposits: r.deposits, versions: test.variants.length, winner: null as string | null };
 }
 
 function applySplitTotals(m: FunnelMetrics, test?: SplitTest): FunnelMetrics {
-  const t = splitTotals(test);
+  const t = splitTotals(test, m.meta_campaign_count);
   if (!t) return m;
   const rate = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 1000) / 10 : null);
   return {
@@ -469,8 +458,9 @@ function MetricsPanel({ metrics: m, splitTest, clientName, logoUrl }: { metrics:
     ? [m.deposit_sources.join(' · '), setterNote].filter(Boolean).join(' · ')
     : (setterNote || 'No deposit source set');
 
-  const combined = splitTotals(splitTest);
-  const fpCaption = combined ? `first-party · ${combined.versions} versions combined` : '';
+  const combined = splitTotals(splitTest, m.meta_campaign_count);
+  const isTest = splitTest?.mode === 'test';
+  const fpCaption = !combined ? '' : combined.winner ? `first-party · ${combined.winner}` : isTest ? `first-party · ${combined.versions} versions combined` : 'first-party tracking';
 
   const stages: Stage[] = [
     { key: 'lpv', label: 'LP Views', icon: STAGE_ICONS.views, value: m.lp_views, caption: combined ? fpCaption : m.meta_campaign_count ? `${m.meta_campaign_count} campaign${m.meta_campaign_count === 1 ? '' : 's'}` : 'No campaigns mapped' },
@@ -511,10 +501,21 @@ function MetricsPanel({ metrics: m, splitTest, clientName, logoUrl }: { metrics:
         {combined && (
           <div className="mb-4 flex items-center gap-2 text-[11px] text-fg-dim">
             <SplitSquareHorizontal size={13} className="text-pink" />
-            Split test running — showing first-party tracking, all versions combined.
+            {combined.winner
+              ? <>First-party tracking for the selected dates, showing the winning version <span className="font-semibold text-fg">{combined.winner}</span> only. The split test below keeps its full history.</>
+              : isTest
+              ? 'First-party tracking for the selected dates, all versions combined. The split test below is judged on its full history.'
+              : 'First-party tracking for the selected dates. No Meta campaigns are mapped to this funnel, so these are recorded directly from its pages.'}
           </div>
         )}
         <StageFlow stages={stages} />
+      </div>
+
+      {/* Ad spend beside the day-by-day results on wide screens; stacked below that. With no
+          campaigns mapped there is no Meta panel and the chart takes the full width. */}
+      <div className={cn('grid gap-5', m.meta && 'xl:grid-cols-2')}>
+        {m.meta && <MetaAdsPanel meta={m.meta} campaigns={m.meta_campaign_count} />}
+        {m.daily.length > 0 && <FunnelDailyChart days={m.daily} note={combined ? 'opt-in tags and payments in GHL' : undefined} />}
       </div>
 
       {m.lp_views == null && !combined && (
@@ -547,6 +548,50 @@ function MetricsPanel({ metrics: m, splitTest, clientName, logoUrl }: { metrics:
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// The ad side of the funnel: what the mapped Meta campaigns spent in the selected dates and
+// what each funnel result cost. Spend and the three cost-per figures lead; delivery sits under.
+function MetaAdsPanel({ meta: a, campaigns }: { meta: FunnelMeta; campaigns: number }) {
+  const money = (v: number | null) => formatGBP(v, { decimals: 2 });
+  const count = (v: number) => new Intl.NumberFormat('en-GB').format(v);
+  return (
+    <div className="rounded-2xl border border-border bg-surface p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-sm font-semibold text-fg">Meta Ads</div>
+        <div className="text-[11px] text-fg-dim">{campaigns} campaign{campaigns === 1 ? '' : 's'} mapped · selected dates</div>
+      </div>
+      {a.spend === 0 && a.impressions === 0 ? (
+        <p className="mt-3 text-sm text-fg-muted">The mapped campaign{campaigns === 1 ? '' : 's'} had no spend or delivery in these dates.</p>
+      ) : (
+        <>
+          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-2">
+            <AdStat label="Amount spent" value={money(a.spend)} big />
+            <AdStat label="CPL" tip="Cost per lead: amount spent ÷ this funnel's opt-ins in GHL." value={money(a.cpl)} big accent />
+            <AdStat label="Cost per deposit" tip="Amount spent ÷ this funnel's deposits (funnel and phone)." value={money(a.cost_per_deposit)} big />
+            <AdStat label="Cost per LP view" tip="Amount spent ÷ landing page views reported by Meta." value={money(a.cost_per_lp_view)} big />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-4 border-t border-border/60 pt-4 sm:grid-cols-3 lg:grid-cols-6 xl:grid-cols-3">
+            <AdStat label="Impressions" value={count(a.impressions)} />
+            <AdStat label="Link clicks" value={count(a.link_clicks)} />
+            <AdStat label="LP views" value={count(a.lp_views)} />
+            <AdStat label="CTR" tip="Link clicks ÷ impressions." value={formatPercent(a.ctr_pct, 2)} />
+            <AdStat label="CPC" tip="Amount spent ÷ link clicks." value={money(a.cpc)} />
+            <AdStat label="CPM" tip="Cost per 1,000 impressions." value={money(a.cpm)} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AdStat({ label, value, tip, big, accent }: { label: string; value: string; tip?: string; big?: boolean; accent?: boolean }) {
+  return (
+    <div className={cn(big && 'rounded-xl bg-surface-2 px-4 py-3')}>
+      <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-fg-muted">{label}{tip && <InfoTip text={tip} />}</div>
+      <div className={cn('mt-1 font-mono font-bold tabular-nums', big ? 'text-2xl' : 'text-base', accent ? 'text-pink' : 'text-fg')}>{value}</div>
     </div>
   );
 }
