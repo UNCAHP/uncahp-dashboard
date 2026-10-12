@@ -6,6 +6,8 @@ import { cn, formatNumber } from '@/lib/utils';
 
 // The LP views → opt-ins → deposits flow: three stage cards joined by "continue" connectors.
 // Shared by the funnel detail view and each split test version so they read the same way.
+// The cards carry numbers only; the step rate on each connector is the visual link between
+// stages (a bar to scale would be one full block and two slivers on any real funnel).
 
 export type Stage = {
   key: string;
@@ -34,7 +36,6 @@ export function StageFlow({ stages, accent = 'pink', compact = false }: { stages
             icon={s.icon}
             value={s.value}
             share={share(s.value)}
-            widthPct={s.value == null ? 0 : Math.max(4, share(s.value) ?? 0)}
             caption={s.caption}
             breakdown={s.breakdown}
             accent={accent}
@@ -55,20 +56,18 @@ export function StageFlow({ stages, accent = 'pink', compact = false }: { stages
 }
 
 export function StageCard({
-  label, icon: Icon, value, share, widthPct, caption, breakdown, accent = 'pink', compact = false,
+  label, icon: Icon, value, share, caption, breakdown, accent = 'pink', compact = false,
 }: {
   label: string;
   icon: typeof Eye;
   value: number | null;
   share: number | null;
-  widthPct: number;
   caption: string;
   breakdown?: { label: string; value: number }[];
   accent?: 'pink' | 'green';
   compact?: boolean;
 }) {
   const iconColor = accent === 'green' ? 'text-green' : 'text-pink';
-  const fill = accent === 'green' ? 'from-green/70 to-green' : 'from-pink/70 to-pink';
   return (
     <div className={cn('flex min-w-0 flex-1 flex-col rounded-xl border border-border bg-surface-2/30', compact ? 'p-4' : 'p-5')}>
       <div className="flex items-center gap-2">
@@ -90,11 +89,6 @@ export function StageCard({
         </div>
       )}
       <div className="mt-1 truncate text-[11px] text-fg-dim" title={caption}>{caption}</div>
-      <div className={cn('mt-auto', compact ? 'pt-3' : 'pt-4')}>
-        <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
-          <div className={cn('h-full rounded-full bg-gradient-to-r transition-[width] duration-500', fill)} style={{ width: `${widthPct}%` }} />
-        </div>
-      </div>
     </div>
   );
 }
@@ -105,7 +99,7 @@ export function StageConnector({ pct, dropped, accent = 'pink', compact = false 
       <ArrowDown size={16} className="text-fg-dim lg:hidden" />
       <ArrowRight size={18} className="hidden text-fg-dim lg:block" />
       <div className="text-center">
-        <div className={cn('text-sm font-bold', accent === 'green' ? 'text-green' : 'text-pink')}>{pct == null ? '—' : `${pct}%`}</div>
+        <div className={cn('font-mono font-bold tabular-nums', compact ? 'text-sm' : 'text-lg', accent === 'green' ? 'text-green' : 'text-pink')}>{pct == null ? '—' : `${pct}%`}</div>
         <div className="text-[9px] uppercase tracking-wide text-fg-dim">continue</div>
         {dropped != null && dropped > 0 && <div className="text-[9px] text-fg-dim">−{formatNumber(dropped)}</div>}
       </div>
