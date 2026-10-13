@@ -1,12 +1,13 @@
 import { getActiveClients } from '@/lib/queries';
 import { evaluateLeads, getShifts, type LeadEval } from '@/lib/csrMetrics';
+import { rejectUnlessReader } from '@/lib/apiAuth';
 import { setterClients, isTrackedSetter, UNTRACKED_SETTERS, SPEED_TO_LEAD_MINUTES, SPEED_TARGET_PCT, CSR_SETTERS } from '@/lib/csrConstants';
 
 // Read-only Speed to Lead for Viktor (the Slack CSR bot), so it can report back to Slack.
 // Same bearer secret as /api/shifts — one integration, one credential.
 //
 //   GET /api/speed-to-lead?from=YYYY-MM-DD&to=YYYY-MM-DD[&csr=alexis][&client=<ghl location id>][&leads=1]
-//   Authorization: Bearer <SHIFTS_API_SECRET>
+//   Authorization: Bearer <REPORTS_API_SECRET>   (read-only key; SHIFTS_API_SECRET also works)
 //
 // Defaults: from = to = today (London). `csr` narrows to one setter; `client` to one client.
 // `leads=1` (or `leads=missed`) adds a lead-by-lead `leads` list — every measured lead with
@@ -57,11 +58,8 @@ function out(b: Bucket) {
 }
 
 export async function GET(req: Request) {
-  const secret = process.env.SHIFTS_API_SECRET;
-  if (!secret) return Response.json({ ok: false, error: 'SHIFTS_API_SECRET not configured' }, { status: 503 });
-  if (req.headers.get('authorization') !== `Bearer ${secret}`) {
-    return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
-  }
+  const denied = rejectUnlessReader(req);
+  if (denied) return denied;
 
   const url = new URL(req.url);
   const today = londonToday();

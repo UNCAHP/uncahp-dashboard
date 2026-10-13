@@ -2,12 +2,13 @@ import { defaultRange, getClientList, getFunnelMetrics } from '@/lib/queries';
 import { getAdminFunnels } from '@/lib/funnelAdmin';
 import { getSplitTests } from '@/lib/splitTests';
 import { splitTotals, applySplitTotals } from '@/lib/funnelTotals';
+import { rejectUnlessReader } from '@/lib/apiAuth';
 
 // Read-only Funnel Analytics for Viktor (the Slack bot), so its reports use the same numbers
 // the dashboard shows. Same bearer secret as /api/shifts and /api/speed-to-lead.
 //
 //   GET /api/funnel-analytics?since=YYYY-MM-DD&until=YYYY-MM-DD[&client=<ghl location id>][&funnel=<funnel id>][&status=active|archived|all][&daily=1]
-//   Authorization: Bearer <SHIFTS_API_SECRET>
+//   Authorization: Bearer <REPORTS_API_SECRET>   (read-only key; SHIFTS_API_SECRET also works)
 //
 // Defaults: the last 30 days (the dashboard's default range), active funnels only.
 // `from` / `to` are accepted as aliases of `since` / `until`. `daily=1` adds each funnel's
@@ -27,11 +28,8 @@ export const dynamic = 'force-dynamic';
 const isDate = (s: string | null): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 export async function GET(req: Request) {
-  const secret = process.env.SHIFTS_API_SECRET;
-  if (!secret) return Response.json({ ok: false, error: 'SHIFTS_API_SECRET not configured' }, { status: 503 });
-  if (req.headers.get('authorization') !== `Bearer ${secret}`) {
-    return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
-  }
+  const denied = rejectUnlessReader(req);
+  if (denied) return denied;
 
   const q = new URL(req.url).searchParams;
   const sinceParam = q.get('since') ?? q.get('from');
