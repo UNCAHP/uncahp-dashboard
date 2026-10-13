@@ -16,8 +16,9 @@ export function middleware(req: NextRequest) {
   // the dashboard password). The collector does its own origin/bot checks. Let it through.
   if (req.nextUrl.pathname.startsWith('/api/track')) return NextResponse.next();
 
-  // Viktor (Slack bot) integration: shift intake + Speed to Lead read-out, bearer secret.
-  if (req.nextUrl.pathname === '/api/shifts' || req.nextUrl.pathname === '/api/speed-to-lead') return NextResponse.next();
+  // Viktor (Slack bot) integration: shift intake + Speed to Lead and Funnel Analytics
+  // read-outs. Each route checks the bearer secret itself.
+  if (['/api/shifts', '/api/speed-to-lead', '/api/funnel-analytics'].includes(req.nextUrl.pathname)) return NextResponse.next();
 
   const expectedUser = process.env.BASIC_AUTH_USER;
   const expectedPass = process.env.BASIC_AUTH_PASSWORD;
