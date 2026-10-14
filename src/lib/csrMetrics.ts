@@ -52,9 +52,11 @@ export const offTrackDay = (day: string): boolean => SPEED_WEEKDAYS_ONLY && isWe
 const firstName = (s: string): string => s.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
 
 // Supabase caps a select at 1000 rows; page through anything that can exceed it. Every
-// paged query must be ordered on a unique column (.order('id')): without an ORDER BY,
+// paged query must end its ORDER BY on a unique column (.order('id')): without one,
 // Postgres may return rows in a different order per page, so pages overlap and rows go
-// missing — which made Speed to Lead change from one page load to the next.
+// missing — which made Speed to Lead change from one page load to the next. Order by the
+// date column the query filters on first, so Postgres uses that index rather than walking
+// the primary key (slow enough to hit the statement timeout on big tables).
 async function pageAll<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
   const out: T[] = [];
   for (let from = 0; ; from += 1000) {
@@ -119,6 +121,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
         .in('location_id', ids)
         .gte('date_added', `${range.since}T00:00:00Z`)
         .lte('date_added', `${range.until}T23:59:59Z`)
+        .order('date_added')
         .order('id')
         .range(f, t)),
     // No upper bound: a lead near the end of the range may be dialled after it.
@@ -128,6 +131,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
         .in('location_id', ids)
         .eq('direction', 'outbound')
         .gte('call_at', `${range.since}T00:00:00Z`)
+        .order('call_at')
         .order('id')
         .range(f, t)),
     getShifts(range),
@@ -137,6 +141,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
         .in('location_id', ids)
         .eq('status', 'succeeded')
         .gte('charge_created_at', `${range.since}T00:00:00Z`)
+        .order('charge_created_at')
         .order('id')
         .range(f, t)),
     getAssignmentHistory(),

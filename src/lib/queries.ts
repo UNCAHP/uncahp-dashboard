@@ -69,9 +69,11 @@ type MetaAction = { action_type?: string; value?: string };
 // any query builder via .range() until we get a partial page (signalling end of data).
 // All time-bucketed queries against meta_daily_stats / ghl_contacts / ghl_opportunities
 // MUST go through this — we have 6,000+ rows in 30 days for Meta alone.
-// Pages are ordered by id (every table read here has one, as a tiebreaker after any order
-// the query sets itself): without a stable ORDER BY, Postgres may return rows in a
-// different order per page, so pages overlap and rows are skipped or counted twice.
+// Pages need a stable ORDER BY, or Postgres may return rows in a different order per page
+// and pages overlap (rows skipped or counted twice). id is appended to every query as the
+// tiebreaker. A query filtered on a date range should ALSO order by that date column first
+// (.order('date') etc.): ordering by id alone makes Postgres walk the primary key instead
+// of the date index, which on meta_daily_stats ran past the anon role's statement timeout.
 async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
   const PAGE = 1000;
   const out: T[] = [];
@@ -142,6 +144,7 @@ export async function getPortfolio(
       .select('client_id, client_name, spend_cents, leads, purchases, actions')
       .gte('date', range.since)
       .lte('date', range.until)
+      .order('date')
       .neq('client_id', 'UNCAHP_AGENCY');
     if (clientFilter) q = q.eq('client_id', clientFilter);
     return q;
@@ -151,7 +154,8 @@ export async function getPortfolio(
       .from('ghl_contacts')
       .select('location_id, tags')
       .gte('date_added', `${range.since}T00:00:00Z`)
-      .lte('date_added', `${range.until}T23:59:59Z`);
+      .lte('date_added', `${range.until}T23:59:59Z`)
+      .order('date_added');
     if (clientFilter) q = q.eq('location_id', clientFilter);
     return q;
   };
@@ -161,7 +165,8 @@ export async function getPortfolio(
       .select('location_id, amount_cents, contact_source_id, entity_source_id')
       .eq('status', 'succeeded')
       .gte('charge_created_at', `${range.since}T00:00:00Z`)
-      .lte('charge_created_at', `${range.until}T23:59:59Z`);
+      .lte('charge_created_at', `${range.until}T23:59:59Z`)
+      .order('charge_created_at');
     if (clientFilter) q = q.eq('location_id', clientFilter);
     return q;
   };
@@ -176,7 +181,8 @@ export async function getPortfolio(
       .from('profit_tracker_entries')
       .select('location_id, total_revenue_gbp')
       .gte('effective_date', range.since)
-      .lte('effective_date', range.until);
+      .lte('effective_date', range.until)
+      .order('effective_date');
     if (clientFilter) q = q.eq('location_id', clientFilter);
     return q;
   };
@@ -418,6 +424,7 @@ export async function getAdAttribution(
       .select('ad_source_id, client_id, client_name, spend_cents, leads')
       .gte('date', range.since)
       .lte('date', range.until)
+      .order('date')
       .in('client_id', clientIds),
   );
 
@@ -461,7 +468,8 @@ export async function getAdAttribution(
       .select('source_id, location_id, metadata')
       .in('location_id', clientIds)
       .gte('date_added', `${range.since}T00:00:00Z`)
-      .lte('date_added', `${range.until}T23:59:59Z`),
+      .lte('date_added', `${range.until}T23:59:59Z`)
+      .order('date_added'),
   );
 
   const adIdSet = new Set(adById.keys());
@@ -480,7 +488,8 @@ export async function getAdAttribution(
       .in('location_id', clientIds)
       .eq('status', 'won')
       .gte('created_at', `${range.since}T00:00:00Z`)
-      .lte('created_at', `${range.until}T23:59:59Z`),
+      .lte('created_at', `${range.until}T23:59:59Z`)
+      .order('created_at'),
   );
   const wonContactIds = new Set<string>();
   for (const o of wonOpps) {
@@ -597,7 +606,8 @@ export async function getFunnelBreakdown(
         .eq('location_id', clientId)
         .eq('status', 'succeeded')
         .gte('charge_created_at', `${range.since}T00:00:00Z`)
-        .lte('charge_created_at', `${range.until}T23:59:59Z`),
+        .lte('charge_created_at', `${range.until}T23:59:59Z`)
+        .order('charge_created_at'),
     ),
   ]);
 
@@ -775,7 +785,8 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
         .select('actions, spend_cents, impressions')
         .in('campaign_source_id', funnel.meta_campaign_ids)
         .gte('date', range.since)
-        .lte('date', range.until),
+        .lte('date', range.until)
+        .order('date'),
     );
     lp_views = rows.reduce((s, r) => s + extractAction(r.actions, 'landing_page_view'), 0);
     ads = {
@@ -807,7 +818,8 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
         .select('tags, date_added, first_name, last_name, email, phone')
         .eq('location_id', funnel.client_id)
         .gte('date_added', `${range.since}T00:00:00Z`)
-        .lte('date_added', `${range.until}T23:59:59Z`),
+        .lte('date_added', `${range.until}T23:59:59Z`)
+        .order('date_added'),
     );
     for (const c of contacts) {
       const t = Array.isArray(c.tags) ? c.tags.map(norm) : [];
@@ -842,7 +854,8 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
         .eq('location_id', funnel.client_id)
         .eq('status', 'succeeded')
         .gte('charge_created_at', `${range.since}T00:00:00Z`)
-        .lte('charge_created_at', `${range.until}T23:59:59Z`),
+        .lte('charge_created_at', `${range.until}T23:59:59Z`)
+        .order('charge_created_at'),
     );
     const directCounted = new Set<string>();    // direct-source deposits (unconditional)
     const setterPending = new Set<string>();    // setter-source contacts awaiting tag verification
@@ -1102,7 +1115,8 @@ export async function getCampaignExplorer(
         .select('ad_source_id, spend_cents, clicks, impressions, leads, purchases')
         .eq('client_id', clientId)
         .gte('date', range.since)
-        .lte('date', range.until),
+        .lte('date', range.until)
+        .order('date'),
     ),
     fetchAll<CampRow>(() =>
       supabase.from('meta_campaigns').select('source_id, name, status, objective').eq('client_id', clientId),
@@ -1122,7 +1136,8 @@ export async function getCampaignExplorer(
         .select('metadata, tags')
         .eq('location_id', clientId)
         .gte('date_added', `${range.since}T00:00:00Z`)
-        .lte('date_added', `${range.until}T23:59:59Z`),
+        .lte('date_added', `${range.until}T23:59:59Z`)
+        .order('date_added'),
     ),
   ]);
 
