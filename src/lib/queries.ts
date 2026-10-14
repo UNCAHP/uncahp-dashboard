@@ -1,5 +1,6 @@
 import { supabase, supabaseAdmin } from './supabase';
 import type { AdminFunnel, FunnelPageLink } from './funnelAdmin';
+import { isTestLead } from './testLeads';
 
 export type DateRange = {
   since: string; // YYYY-MM-DD
@@ -784,7 +785,8 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
   // Opt-ins: contacts carrying ALL the funnel's opt-in tags, CREATED in range. Matches a
   // GHL "Tag Is [...] AND Created Between [...]" smart list exactly. Deduplicated per
   // contact (a lead who enquires multiple times counts once). Net-new only — a contact
-  // created in an earlier period is not re-counted here even if it re-engages.
+  // created in an earlier period is not re-counted here even if it re-engages. The team's
+  // own test submissions (testLeads.isTestLead) are left out, as they are in Speed to Lead.
   const need = funnel.optin_tags.map(norm);
   let optins = 0;
   const optinsByDay = new Map<string, number>();
@@ -795,18 +797,18 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
     m.set(day, (m.get(day) ?? 0) + 1);
   };
   if (need.length > 0) {
-    type ContactRow = { tags: unknown; date_added: string | null };
+    type ContactRow = { tags: unknown; date_added: string | null; first_name: string | null; last_name: string | null; email: string | null; phone: string | null };
     const contacts = await fetchAll<ContactRow>(() =>
       supabase
         .from('ghl_contacts')
-        .select('tags, date_added')
+        .select('tags, date_added, first_name, last_name, email, phone')
         .eq('location_id', funnel.client_id)
         .gte('date_added', `${range.since}T00:00:00Z`)
         .lte('date_added', `${range.until}T23:59:59Z`),
     );
     for (const c of contacts) {
       const t = Array.isArray(c.tags) ? c.tags.map(norm) : [];
-      if (need.every(w => t.includes(w))) { optins++; bump(optinsByDay, c.date_added); }
+      if (need.every(w => t.includes(w)) && !isTestLead(c)) { optins++; bump(optinsByDay, c.date_added); }
     }
   }
 
@@ -819,6 +821,7 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
   //     never get those tags). Skipped entirely if no opt-in tags are configured — without
   //     them there's nothing to verify against and we'd risk counting other offers' phone
   //     deposits. Both sets dedupe together per contact.
+  // A payment made by a test contact (testLeads.isTestLead) counts under neither kind.
   let deposits_direct = 0;   // paid on the funnel's own deposit page
   let deposits_setter = 0;   // paid via a setter/phone link, verified by opt-in tags
   // Trim on both sides — GHL payment-link names sometimes carry stray leading/trailing
@@ -853,23 +856,29 @@ export async function getFunnelMetrics(funnel: AdminFunnel, range: DateRange): P
       else if (setterActive && setterSet.has(src)) { setterPending.add(t.contact_source_id); earliest(setterAt, t.contact_source_id, t.charge_created_at); }
     }
 
-    // Verify setter-source payers: keep only those carrying ALL the funnel's opt-in tags
-    // and not already counted as a direct deposit (dedupe across both source kinds).
+    // Look the payers up once: drop test contacts from both kinds, then verify setter-source
+    // payers — keep only those carrying ALL the funnel's opt-in tags and not already
+    // counted as a direct deposit (dedupe across both source kinds).
     const setterCounted = new Set<string>();
-    const toVerify = Array.from(setterPending).filter(id => !directCounted.has(id));
-    if (toVerify.length > 0) {
-      type ContactTagRow = { source_id: string; tags: unknown };
-      const contacts = await fetchAll<ContactTagRow>(() =>
+    const payers = Array.from(new Set([...directCounted, ...setterPending]));
+    type PayerRow = { source_id: string; tags: unknown; first_name: string | null; last_name: string | null; email: string | null; phone: string | null };
+    const payerRows: PayerRow[] = [];
+    // Batched so a busy funnel's id list never outgrows the request URL.
+    for (let i = 0; i < payers.length; i += 200) {
+      const ids = payers.slice(i, i + 200);
+      payerRows.push(...await fetchAll<PayerRow>(() =>
         supabase
           .from('ghl_contacts')
-          .select('source_id, tags')
+          .select('source_id, tags, first_name, last_name, email, phone')
           .eq('location_id', funnel.client_id)
-          .in('source_id', toVerify),
-      );
-      for (const c of contacts) {
-        const t = Array.isArray(c.tags) ? c.tags.map(norm) : [];
-        if (need.every(w => t.includes(w))) setterCounted.add(c.source_id);
-      }
+          .in('source_id', ids),
+      ));
+    }
+    for (const c of payerRows) {
+      if (isTestLead(c)) { directCounted.delete(c.source_id); continue; }
+      if (directCounted.has(c.source_id) || !setterPending.has(c.source_id)) continue;
+      const t = Array.isArray(c.tags) ? c.tags.map(norm) : [];
+      if (need.every(w => t.includes(w))) setterCounted.add(c.source_id);
     }
     deposits_direct = directCounted.size;
     deposits_setter = setterCounted.size;
