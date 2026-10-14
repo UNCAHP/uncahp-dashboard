@@ -1,7 +1,8 @@
 import { supabase, supabaseAdmin } from './supabase';
 import type { DateRange } from './queries';
-import { SPEED_TO_LEAD_MINUTES, hasRefTag, isTrackedSetter } from './csrConstants';
+import { SPEED_TO_LEAD_MINUTES, SPEED_DAY_START, SPEED_WEEKDAYS_ONLY, hasRefTag, isTrackedSetter } from './csrConstants';
 import { isTestLead } from '@/lib/testLeads';
+import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 
 // ─── Speed to Lead ───────────────────────────────────────────────────────────
 // "% of new leads with an outbound dial within 30 min of enquiry, during setter shifts".
@@ -9,9 +10,12 @@ import { isTestLead } from '@/lib/testLeads';
 //   A NEW LEAD  — a GHL contact created in range that has a phone number AND a campaign
 //                 REF tag (csrConstants.REF_TAG_RE). Untagged contacts and reactivation
 //                 lists aren't new enquiries.
-//   MEASURED    — only if it arrived while someone responsible was on shift (csr_shifts,
-//                 written daily by Viktor after the Start of Day check-in; London time):
-//                 the client's assigned setter (clients.csr_key), or — when they're off —
+//   MEASURED    — only on a weekday, from 10:30 (SPEED_DAY_START) — the morning goes on the
+//                 overnight backlog — and only if it arrived while someone responsible was
+//                 on shift (csr_shifts, written daily by Viktor after the Start of Day
+//                 check-in; London time):
+//                 the client's assigned setter ON THAT DAY (client_csr_assignments, falling
+//                 back to clients.csr_key), or — when they're off —
 //                 whoever else was on shift (cover). A day with no shift rows, or a lead
 //                 arriving when nobody's on, isn't measured at all.
 //   SELF-BOOKED — a lead that paid a deposit within the 30-minute window, before anyone
@@ -37,9 +41,20 @@ const londonDate = (iso: string): string => {
 const londonClock = (iso: string): string =>
   new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
 
+// Saturday or Sunday, for a London yyyy-mm-dd.
+export const isWeekend = (day: string): boolean => {
+  const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
+  return dow === 0 || dow === 6;
+};
+// Days Speed to Lead isn't measured on at all.
+export const offTrackDay = (day: string): boolean => SPEED_WEEKDAYS_ONLY && isWeekend(day);
+
 const firstName = (s: string): string => s.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
 
-// Supabase caps a select at 1000 rows; page through anything that can exceed it.
+// Supabase caps a select at 1000 rows; page through anything that can exceed it. Every
+// paged query must be ordered on a unique column (.order('id')): without an ORDER BY,
+// Postgres may return rows in a different order per page, so pages overlap and rows go
+// missing — which made Speed to Lead change from one page load to the next.
 async function pageAll<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
   const out: T[] = [];
   for (let from = 0; ; from += 1000) {
@@ -78,7 +93,8 @@ export type LeadEval = {
   arrivedAt: string;           // ISO
   day: string;                 // London yyyy-mm-dd
   responsible: string;         // csr key accountable for this lead (see header)
-  cover: boolean;              // responsible ≠ the client's assigned setter
+  assigned: string | null;     // the account's owner on the day the lead arrived
+  cover: boolean;              // responsible ≠ that owner
   firstDialAt: string | null;
   firstDialBy: string | null;  // display name of whoever dialled first
   minsToDial: number | null;
@@ -96,13 +112,14 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
   if (ids.length === 0) return [];
   const assigned = new Map(clients.map(c => [c.client_id, c.csr]));
 
-  const [contacts, calls, shifts, txns] = await Promise.all([
+  const [contacts, calls, shifts, txns, history] = await Promise.all([
     pageAll<{ location_id: string; source_id: string; first_name: string | null; last_name: string | null; email: string | null; date_added: string | null; phone: string | null; tags: unknown }>((f, t) =>
       supabase.from('ghl_contacts')
         .select('location_id, source_id, first_name, last_name, email, date_added, phone, tags')
         .in('location_id', ids)
         .gte('date_added', `${range.since}T00:00:00Z`)
         .lte('date_added', `${range.until}T23:59:59Z`)
+        .order('id')
         .range(f, t)),
     // No upper bound: a lead near the end of the range may be dialled after it.
     pageAll<{ location_id: string; contact_source_id: string | null; user_name: string | null; user_id: string | null; call_at: string | null; status: string | null; duration_sec: number | null }>((f, t) =>
@@ -111,6 +128,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
         .in('location_id', ids)
         .eq('direction', 'outbound')
         .gte('call_at', `${range.since}T00:00:00Z`)
+        .order('id')
         .range(f, t)),
     getShifts(range),
     pageAll<{ contact_source_id: string | null; charge_created_at: string | null }>((f, t) =>
@@ -119,7 +137,9 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
         .in('location_id', ids)
         .eq('status', 'succeeded')
         .gte('charge_created_at', `${range.since}T00:00:00Z`)
+        .order('id')
         .range(f, t)),
+    getAssignmentHistory(),
   ]);
 
   // Earliest succeeded deposit per contact.
@@ -147,7 +167,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
   // for Speed to Lead can't be responsible for a lead, so their shifts don't count here.
   const byDay = new Map<string, Shift[]>();
   for (const s of shifts) {
-    if (s.off || !isTrackedSetter(s.csr)) continue;
+    if (s.off || !isTrackedSetter(s.csr) || offTrackDay(s.date)) continue;
     const l = byDay.get(s.date) ?? [];
     l.push(s);
     byDay.set(s.date, l);
@@ -160,14 +180,16 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
     if (isTestLead(l)) continue; // the team's own test submissions aren't leads
     const day = londonDate(l.date_added);
     const t = londonClock(l.date_added);
-    const on = (byDay.get(day) ?? []).filter(s => t >= s.start && t < s.end);
-    if (on.length === 0) continue; // nobody on shift → not measured
+    // The measured part of a shift runs from 10:30 (or its start, if later) to its end.
+    const on = (byDay.get(day) ?? []).filter(s => t >= (s.start > SPEED_DAY_START ? s.start : SPEED_DAY_START) && t < s.end);
+    if (on.length === 0) continue; // weekend, before 10:30, or nobody on shift → not measured
 
     const fc = firstCall.get(l.source_id);
     const dial = fc && fc.at > l.date_added ? fc : null;
     const dialBy = dial ? firstName(dial.by) : null;
 
-    const own = assigned.get(l.location_id) ?? null;
+    const dated = ownerOn(history, l.location_id, day);
+    const own = dated === undefined ? assigned.get(l.location_id) ?? null : dated;
     let responsible: string;
     if (own && on.some(s => s.csr === own)) responsible = own;
     else if (dialBy && on.some(s => s.csr === dialBy)) responsible = dialBy;
@@ -186,6 +208,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
       arrivedAt: l.date_added,
       day,
       responsible,
+      assigned: own,
       cover: responsible !== own,
       firstDialAt: dial?.at ?? null,
       firstDialBy: dial?.by ?? null,
@@ -294,8 +317,10 @@ export type ClientSpeedRow = {
   pct: number | null;
 };
 
-export async function getClientSpeedRows(clients: ClientAssign[], range: DateRange): Promise<ClientSpeedRow[]> {
-  const leads = await evaluateLeads(clients, range);
+// `evaluated` lets a caller that already ran evaluateLeads for the same clients and range
+// reuse it instead of reading every contact and call again.
+export async function getClientSpeedRows(clients: ClientAssign[], range: DateRange, evaluated?: LeadEval[]): Promise<ClientSpeedRow[]> {
+  const leads = evaluated ?? await evaluateLeads(clients, range);
   const by = new Map<string, ClientSpeedRow>();
   for (const c of clients) by.set(c.client_id, { client_id: c.client_id, csr: c.csr, leads: 0, attempted: 0, connected: 0, neverCalled: 0, selfBooked: 0, pct: null });
   for (const l of leads) {
@@ -352,8 +377,8 @@ export type SetterCard = {
   days: ShiftRow[];             // one per check-in in the range, oldest first
 };
 
-export async function getSetterScorecard(clients: ClientAssign[], range: DateRange): Promise<SetterCard[]> {
-  const [shifts, leads] = await Promise.all([getShifts(range), evaluateLeads(clients, range)]);
+export async function getSetterScorecard(clients: ClientAssign[], range: DateRange, evaluated?: LeadEval[]): Promise<SetterCard[]> {
+  const [shifts, leads, history] = await Promise.all([getShifts(range), evaluated ?? evaluateLeads(clients, range), getAssignmentHistory()]);
   const pctOf = (n: number, d: number) => (d ? +((100 * n) / d).toFixed(1) : null);
 
   type Acc = SetterCard & { mins: number[]; byClient: Map<string, SetterClientRow>; byDay: Map<string, ShiftRow> };
@@ -372,10 +397,15 @@ export async function getSetterScorecard(clients: ClientAssign[], range: DateRan
     return r;
   };
 
-  // Every tracked setter with an assignment or a check-in appears, even with no leads.
-  for (const c of clients) if (c.csr && isTrackedSetter(c.csr)) clientRow(get(c.csr), c.client_id, false);
+  // Every tracked setter with an assignment or a check-in appears, even with no leads. An
+  // account reassigned within the range is listed as its own under each owner.
+  for (const c of clients) {
+    for (const o of ownersBetween(history, c.client_id, range.since, range.until) ?? [c.csr]) {
+      if (o && isTrackedSetter(o)) clientRow(get(o), c.client_id, false);
+    }
+  }
   for (const s of shifts) {
-    if (!isTrackedSetter(s.csr)) continue;
+    if (!isTrackedSetter(s.csr) || offTrackDay(s.date)) continue;
     const a = get(s.csr);
     if (!s.off) a.shifts++;
     a.byDay.set(s.date, { date: s.date, csr: s.csr, start: s.start, end: s.end, off: s.off, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null, coverLeads: 0 });

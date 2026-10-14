@@ -1,7 +1,9 @@
 'use server';
 
+import { requirePage } from '@/lib/auth';
 import { revalidatePath } from 'next/cache';
 import { supabaseAdmin } from '@/lib/supabase';
+import { currentMonthStart } from '@/lib/csrAssignments';
 
 export type ActionState = { ok: boolean; error?: string };
 
@@ -23,9 +25,39 @@ function csrField(fd: FormData): string | null {
   return v || null;
 }
 
-// segment (0017) and csr_key (0019) arrive with migrations. If a column isn't there yet,
-// retry the write without the new fields so client edits keep working meanwhile.
-const MISSING_SEGMENT = /segment|csr_key/i;
+// Monthly bookings target for the CSR Dashboard: a whole number, or null when left blank.
+function targetField(fd: FormData): number | null {
+  const v = field(fd, 'monthly_booking_target');
+  if (v == null) return null;
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+// segment (0017), csr_key (0019) and monthly_booking_target (0020) arrive with migrations.
+// If a column isn't there yet, retry the write without the new fields so client edits keep
+// working meanwhile.
+const MISSING_SEGMENT = /segment|csr_key|monthly_booking_target/i;
+
+// Keep the dated setter history (client_csr_assignments) in step with clients.csr_key. A
+// new client's setter applies from the start; a change applies from the 1st of the current
+// month, so earlier months stay credited to the previous setter. Before the account has
+// any history, the old owner is written as the baseline first. Best-effort, like the GHL
+// enrolment: the table arrives with migration 0020 and a failure never blocks the save.
+async function recordAssignment(location: string | null, prev: string | null | undefined, next: string | null) {
+  if (!location || prev === next) return;
+  try {
+    const t = supabaseAdmin.from('client_csr_assignments');
+    if (prev === undefined) {
+      await t.upsert({ ghl_location_id: location, csr_key: next, effective_from: '2000-01-01' }, { onConflict: 'ghl_location_id,effective_from' });
+      return;
+    }
+    const { count } = await supabaseAdmin.from('client_csr_assignments').select('*', { count: 'exact', head: true }).eq('ghl_location_id', location);
+    if (!count) await supabaseAdmin.from('client_csr_assignments').insert({ ghl_location_id: location, csr_key: prev, effective_from: '2000-01-01' });
+    await supabaseAdmin.from('client_csr_assignments').upsert({ ghl_location_id: location, csr_key: next, effective_from: currentMonthStart() }, { onConflict: 'ghl_location_id,effective_from' });
+  } catch (e) {
+    console.error('recordAssignment failed:', e);
+  }
+}
 
 function field(fd: FormData, name: string): string | null {
   const v = (fd.get(name) ?? '').toString().trim();
@@ -108,6 +140,7 @@ async function handleLogoUpload(fd: FormData): Promise<{ url: string | null; err
 }
 
 export async function createClientAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  await requirePage('clients');
   try {
     const client_name = field(fd, 'client_name');
     if (!client_name) return { ok: false, error: 'Client name is required.' };
@@ -127,10 +160,11 @@ export async function createClientAction(_prev: ActionState, fd: FormData): Prom
       logo_url: logo.url,
       notes: field(fd, 'notes'),
     };
-    let { error } = await supabaseAdmin.from('clients').insert({ ...row, segment: segmentField(fd), csr_key: csrField(fd) });
+    let { error } = await supabaseAdmin.from('clients').insert({ ...row, segment: segmentField(fd), csr_key: csrField(fd), monthly_booking_target: targetField(fd) });
     if (error && MISSING_SEGMENT.test(error.message)) ({ error } = await supabaseAdmin.from('clients').insert(row));
 
     if (error) return { ok: false, error: error.message };
+    await recordAssignment(ghl_location_id, undefined, csrField(fd));
     await upsertGhlEnrollment({ location_id: ghl_location_id, location_name: client_name, api_key: ghl_api_key, is_active: true });
     revalidatePath('/');
     return { ok: true };
@@ -141,6 +175,7 @@ export async function createClientAction(_prev: ActionState, fd: FormData): Prom
 }
 
 export async function updateClientAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  await requirePage('clients');
   try {
     const id = field(fd, 'id');
     if (!id) return { ok: false, error: 'Missing client id.' };
@@ -156,6 +191,7 @@ export async function updateClientAction(_prev: ActionState, fd: FormData): Prom
       notes: field(fd, 'notes'),
       segment: segmentField(fd),
       csr_key: csrField(fd),
+      monthly_booking_target: targetField(fd),
     };
 
     // Only overwrite the GHL key when a new value is entered — leaving the field blank
@@ -168,13 +204,17 @@ export async function updateClientAction(_prev: ActionState, fd: FormData): Prom
     if (logo.error) return { ok: false, error: logo.error };
     if (logo.url) patch.logo_url = logo.url;
 
+    // The setter before this save, to record a reassignment in the dated history.
+    const { data: before } = await supabaseAdmin.from('clients').select('csr_key').eq('id', id).maybeSingle();
+
     let { error } = await supabaseAdmin.from('clients').update(patch).eq('id', id);
     if (error && MISSING_SEGMENT.test(error.message)) {
-      const { segment: _segment, csr_key: _csr, ...withoutSegment } = patch;
-      void _segment; void _csr;
+      const { segment: _segment, csr_key: _csr, monthly_booking_target: _target, ...withoutSegment } = patch;
+      void _segment; void _csr; void _target;
       ({ error } = await supabaseAdmin.from('clients').update(withoutSegment).eq('id', id));
     }
     if (error) return { ok: false, error: error.message };
+    await recordAssignment(ghl_location_id, (before as { csr_key?: string | null } | null)?.csr_key ?? null, csrField(fd));
     await upsertGhlEnrollment({ location_id: ghl_location_id, location_name: client_name, api_key: newKey });
     revalidatePath('/');
     return { ok: true };
@@ -185,6 +225,7 @@ export async function updateClientAction(_prev: ActionState, fd: FormData): Prom
 }
 
 export async function setClientStatusAction(id: string, status: 'active' | 'archived'): Promise<ActionState> {
+  await requirePage('clients');
   if (!id) return { ok: false, error: 'Missing client id.' };
 
   const { data: row, error } = await supabaseAdmin

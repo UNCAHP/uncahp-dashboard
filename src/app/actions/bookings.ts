@@ -1,5 +1,6 @@
 'use server';
 
+import { requirePage } from '@/lib/auth';
 import { revalidatePath } from 'next/cache';
 import { supabaseAdmin } from '@/lib/supabase';
 import {
@@ -104,6 +105,7 @@ function draftColumns(clientId: string, d: BookingDraft) {
 
 // Quick inline update of a booking's channel (setters marking SMS vs Phone in the table).
 export async function setBookingChannel(id: string, channel: BookingChannel | null): Promise<ActionState> {
+  await requirePage('admin');
   if (!id) return { ok: false, error: 'Missing booking id.' };
   const { error } = await supabaseAdmin.from('bookings').update({ booking_channel: channel }).eq('id', id);
   if (error) return { ok: false, error: error.message };
@@ -114,6 +116,7 @@ export async function setBookingChannel(id: string, channel: BookingChannel | nu
 // ─── Manual CRUD ─────────────────────────────────────────────────────────────
 
 export async function createBooking(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  await requirePage('admin');
   try {
     const client_id = field(fd, 'client_id');
     if (!client_id) return { ok: false, error: 'Missing client.' };
@@ -135,6 +138,7 @@ export async function createBooking(_prev: ActionState, fd: FormData): Promise<A
 }
 
 export async function updateBooking(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  await requirePage('admin');
   try {
     const id = field(fd, 'id');
     const client_id = field(fd, 'client_id');
@@ -162,6 +166,7 @@ export async function updateBooking(_prev: ActionState, fd: FormData): Promise<A
 }
 
 export async function deleteBooking(id: string): Promise<ActionState> {
+  await requirePage('admin');
   if (!id) return { ok: false, error: 'Missing booking id.' };
   const { error } = await supabaseAdmin.from('bookings').delete().eq('id', id);
   if (error) return { ok: false, error: error.message };
@@ -171,6 +176,7 @@ export async function deleteBooking(id: string): Promise<ActionState> {
 
 // Monthly, manually-compounded service fee (month-level, not per booking).
 export async function setMonthCost(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  await requirePage('admin');
   try {
     const client_id = field(fd, 'client_id');
     const period_month = monthFirst(field(fd, 'period_month'));

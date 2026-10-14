@@ -1,5 +1,6 @@
 'use server';
 
+import { requirePage } from '@/lib/auth';
 import { revalidatePath } from 'next/cache';
 import { supabaseAdmin } from '@/lib/supabase';
 import {
@@ -117,6 +118,7 @@ async function updateFunnel(id: string, base: Record<string, unknown>, split: Sp
 }
 
 export async function createFunnelAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  await requirePage('funnel');
   try {
     const client_id = field(fd, 'client_id');
     const name = field(fd, 'name');
@@ -146,6 +148,7 @@ export async function createFunnelAction(_prev: ActionState, fd: FormData): Prom
 }
 
 export async function updateFunnelAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  await requirePage('funnel');
   try {
     const id = field(fd, 'id');
     if (!id) return { ok: false, error: 'Missing funnel id.' };
@@ -176,6 +179,7 @@ export async function updateFunnelAction(_prev: ActionState, fd: FormData): Prom
 }
 
 export async function setFunnelStatusAction(id: string, status: 'active' | 'archived'): Promise<ActionState> {
+  await requirePage('funnel');
   if (!id) return { ok: false, error: 'Missing funnel id.' };
   const { error } = await supabaseAdmin
     .from('funnels')
@@ -190,6 +194,7 @@ export async function setFunnelStatusAction(id: string, status: 'active' | 'arch
 // configuration row — the underlying GHL/Meta data is untouched. Not reversible (unlike
 // archiving, which just hides it under the Inactive tab).
 export async function deleteFunnelAction(id: string): Promise<ActionState> {
+  await requirePage('funnel');
   if (!id) return { ok: false, error: 'Missing funnel id.' };
   const { error } = await supabaseAdmin.from('funnels').delete().eq('id', id);
   if (error) return { ok: false, error: error.message };
@@ -199,6 +204,7 @@ export async function deleteFunnelAction(id: string): Promise<ActionState> {
 
 // Called from the form when a client is chosen, to populate the tag + campaign pickers.
 export async function loadFunnelFormData(clientId: string): Promise<{ tags: TagOption[]; campaigns: CampaignOption[]; sources: SourceOption[] }> {
+  await requirePage('funnel');
   if (!clientId) return { tags: [], campaigns: [], sources: [] };
   try {
     const [tags, campaigns, sources] = await Promise.all([

@@ -111,7 +111,7 @@ export function KpisView({ rows, months, month, daily, syncAgeHours, speed }: {
                   />
                   <KpiCell
                     value={!BOOKINGS_KPIS_ENABLED || r.phonePct == null ? '—' : `${r.phonePct}%`}
-                    sub={!BOOKINGS_KPIS_ENABLED ? 'not tracked' : !r.hasSheetRow ? 'no sheet data' : `${r.phone}/${r.phone + r.sms} by phone`}
+                    sub={!BOOKINGS_KPIS_ENABLED ? 'not tracked' : !r.hasSheetRow ? 'no sheet data' : r.phone + r.sms === 0 && r.bookingsTotal > 0 ? 'sheet logs MAN / LP now' : `${r.phone}/${r.phone + r.sms} by phone`}
                     tier={!BOOKINGS_KPIS_ENABLED || r.phonePct == null ? null : phoneTier(r.phonePct)}
                   />
                   <KpiCell

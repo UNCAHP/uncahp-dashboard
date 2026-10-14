@@ -366,11 +366,15 @@ function ClientFormModal({
             />
           </Field>
 
-          <Field label="Assigned setter" hint="Whose shift this client's leads are measured against for Speed to Lead. When they're off, cover from whoever else is on shift counts.">
+          <Field label="Assigned setter" hint="Whose shift this client's leads are measured against for Speed to Lead. When they're off, cover from whoever else is on shift counts. A change applies from the 1st of this month; earlier months stay with the previous setter.">
             <select name="csr_key" defaultValue={initial?.csr_key ?? ''} className={inputCls}>
               <option value="">Self booking — no dedicated setter</option>
               {CSR_SETTERS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
             </select>
+          </Field>
+
+          <Field label="Monthly bookings target" hint="Bookings a month this account should hit (LP + manual). The CSR Dashboard tracks it, with the weekly target worked out pro rata. Leave blank for no target.">
+            <input name="monthly_booking_target" type="number" min={0} step={1} inputMode="numeric" defaultValue={initial?.monthly_booking_target ?? ''} placeholder="e.g. 40" className={inputCls} />
           </Field>
 
           <Field label="Segment" hint="B2B clients (UNCAHP's own funnels) are still listed in Funnel Analytics, but left out of the portfolio totals.">

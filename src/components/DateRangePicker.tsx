@@ -102,7 +102,7 @@ export function DateRangePicker({ since, until, view, client, funnel }: Props) {
   function apply() {
     if (!start || !end) return;
     // Start from the current URL so page state the picker doesn't know about survives a
-    // date change — the Call Tracking tab (ctab) and the active/inactive
+    // date change — the CSR Dashboard person and breakdown (csr, part) and the active/inactive
     // funnel filter (fstatus). Only the range itself is replaced.
     const p = new URLSearchParams(window.location.search);
     if (view && view !== 'overview') p.set('view', view); else p.delete('view');

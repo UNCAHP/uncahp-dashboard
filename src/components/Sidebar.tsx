@@ -2,7 +2,8 @@
 
 import { NavLink, useNav } from '@/components/NavProgress';
 import { useState } from 'react';
-import { LayoutGrid, BarChart3, FlaskConical, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { LayoutGrid, BarChart3, FlaskConical, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search, LogOut } from 'lucide-react';
+import { signOutAction } from '@/app/actions/auth';
 import type { ClientOption } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn } from '@/lib/utils';
@@ -14,7 +15,7 @@ const NAV: Array<{ id: View; label: string; icon: typeof LayoutGrid }> = [
   { id: 'overview', label: 'Portfolio Overview', icon: LayoutGrid },
   { id: 'client', label: 'Client View', icon: BarChart3 },
   { id: 'funnel', label: 'Funnel Analytics', icon: FlaskConical },
-  { id: 'calls', label: 'Call Tracking', icon: Phone },
+  { id: 'calls', label: 'CSR Dashboard', icon: Phone },
   // Bookings is archived for now — hidden from the nav, but the page, its data, and the
   // bookings feed into the KPI scorecard all still work. Reachable at /?view=bookings, and
   // un-archiving is just restoring this line:
@@ -39,13 +40,21 @@ export function Sidebar({
   since,
   until,
   clients,
+  pages,
+  userName,
+  userRole,
 }: {
   view: View;
   selectedClient?: string;
   since: string;
   until: string;
   clients: ClientOption[];
+  pages: string[];      // the pages this user's role can open — only those are listed
+  userName: string;
+  userRole: string;
 }) {
+  const nav = NAV.filter(item => pages.includes(item.id));
+  const showClients = pages.includes('client');
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState('');
 
@@ -53,7 +62,7 @@ export function Sidebar({
 
   // The clicked item lights up at once, while its page is still loading.
   const { target } = useNav();
-  const navHrefs = NAV.map(item => buildHref({ view: item.id, client: item.id === 'client' ? selectedClient : undefined, since, until }));
+  const navHrefs = nav.map(item => buildHref({ view: item.id, client: item.id === 'client' ? selectedClient : undefined, since, until }));
   const clientHref = (id: string) => buildHref({ view: 'client', client: id, since, until });
   const jumping = !!target && (navHrefs.includes(target) || clients.some(c => clientHref(c.client_id) === target));
 
@@ -96,7 +105,7 @@ export function Sidebar({
       )}
 
       <nav className="space-y-1 p-3">
-        {NAV.map(item => {
+        {nav.map(item => {
           const Icon = item.icon;
           const href = buildHref({
             view: item.id,
@@ -121,7 +130,7 @@ export function Sidebar({
         })}
       </nav>
 
-      {!collapsed && (
+      {!collapsed && showClients && (
         <>
           <div className="px-4 pb-2 pt-4">
             <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-fg">
@@ -171,14 +180,25 @@ export function Sidebar({
             )}
           </div>
 
-          <div className="border-t border-border px-4 py-3">
-            <div className="flex items-center gap-2 text-[10px] text-fg-dim">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green" />
-              <span>Live · Meta + GHL</span>
-            </div>
-          </div>
         </>
       )}
+
+      {/* Who's signed in, pinned to the bottom. */}
+      <div className={cn('mt-auto flex items-center gap-2 border-t border-border', collapsed ? 'justify-center px-2 py-3' : 'px-4 py-3')}>
+        {!collapsed && (
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-fg">{userName}</div>
+            <div className="text-[10px] text-fg-dim">{userRole}</div>
+          </div>
+        )}
+        <form action={signOutAction}>
+          <Tooltip label="Sign out" always>
+            <button type="submit" aria-label="Sign out" className="rounded-md p-1.5 text-fg-dim transition-colors hover:bg-surface hover:text-pink">
+              <LogOut size={14} />
+            </button>
+          </Tooltip>
+        </form>
+      </div>
     </aside>
   );
 }

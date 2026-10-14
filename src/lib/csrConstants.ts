@@ -3,6 +3,15 @@
 
 export const SPEED_TO_LEAD_MINUTES = 30;
 
+// When in the day Speed to Lead is measured (London time). Setters spend the start of
+// their shift calling through the leads that came in overnight or over the weekend, so
+// only leads arriving from 10:30 until the end of their shift count. Earlier leads, and
+// every lead that arrives on a Saturday or Sunday (setters only cover accounts then), are
+// left out. Shift times from Viktor's check-in are still read as they are.
+export const SPEED_DAY_START = '10:30';
+export const SPEED_WEEKDAYS_ONLY = true;
+export const SPEED_WINDOW_TEXT = `Measured Monday to Friday, from ${SPEED_DAY_START} until the end of the setter's shift.`;
+
 // Speed to Lead standard (%): at or above it is on target, below it isn't. No tiers —
 // beating it is simply good. One place to change; every view reads this.
 export const SPEED_TARGET_PCT = 70;
@@ -33,7 +42,7 @@ export const CSR_SETTERS: { key: string; label: string }[] = [
 // Setters whose Speed to Lead is NOT tracked (lowercased first name). Their assigned
 // clients drop out of the measure, their shifts don't appear on the Shifts tab, and leads
 // they'd be responsible for while covering aren't counted. Bookings KPIs are unaffected.
-export const UNTRACKED_SETTERS: string[] = ['cathy'];
+export const UNTRACKED_SETTERS: string[] = [];
 export const isTrackedSetter = (key: string | null | undefined): boolean =>
   !!key && !UNTRACKED_SETTERS.includes(key.toLowerCase());
 

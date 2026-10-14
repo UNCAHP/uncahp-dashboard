@@ -1,7 +1,7 @@
 import { getActiveClients } from '@/lib/queries';
 import { evaluateLeads, getShifts, type LeadEval } from '@/lib/csrMetrics';
 import { rejectUnlessReader } from '@/lib/apiAuth';
-import { setterClients, isTrackedSetter, UNTRACKED_SETTERS, SPEED_TO_LEAD_MINUTES, SPEED_TARGET_PCT, CSR_SETTERS } from '@/lib/csrConstants';
+import { setterClients, isTrackedSetter, UNTRACKED_SETTERS, SPEED_TO_LEAD_MINUTES, SPEED_TARGET_PCT, CSR_SETTERS, SPEED_WINDOW_TEXT } from '@/lib/csrConstants';
 
 // Read-only Speed to Lead for Viktor (the Slack CSR bot), so it can report back to Slack.
 // Same bearer secret as /api/shifts — one integration, one credential.
@@ -17,7 +17,8 @@ import { setterClients, isTrackedSetter, UNTRACKED_SETTERS, SPEED_TO_LEAD_MINUTE
 // endpoint returns the measured data for the range it's given.
 //
 // Definition, in short: a NEW LEAD is a contact with a campaign REF tag and a phone number
-// that arrived while its client's assigned setter (or cover) was on shift. ATTEMPTED =
+// that arrived while its client's assigned setter (or cover) was on shift, on a weekday
+// from 10:30 to shift end (csrConstants.SPEED_DAY_START). ATTEMPTED =
 // an outbound dial within 30 min, answered or not (the scored rate). CONNECTED = a
 // completed 60s+ call within 30 min. A lead paid-up within 30 min before any dial
 // SELF-BOOKED and isn't counted. Target: 70%.
@@ -90,6 +91,7 @@ export async function GET(req: Request) {
   const team = bucket();
   const bySetter = new Map<string, { b: Bucket; clients: Map<string, Bucket> }>();
   const detail: LeadEval[] = [];
+  const ownerOf = new Map<string, string>(); // `${setter}|${client}` → that account's owner
   for (const l of leads) {
     // When filtering by setter, keep only leads they were responsible for (own + cover).
     if (csrFilter && l.responsible !== csrFilter) continue;
@@ -101,6 +103,8 @@ export async function GET(req: Request) {
     add(cb, l);
     s.clients.set(l.client_id, cb);
     bySetter.set(l.responsible, s);
+    // The owner on the newest lead's day: right for the range's end if it was reassigned.
+    if (!ownerOf.has(`${l.responsible}|${l.client_id}`)) ownerOf.set(`${l.responsible}|${l.client_id}`, l.assigned ?? '');
   }
   // Setters who were on shift but had no leads still appear, with zeros.
   for (const s of shifts) if (!s.off && isTrackedSetter(s.csr) && (!csrFilter || s.csr === csrFilter) && !bySetter.has(s.csr)) bySetter.set(s.csr, { b: bucket(), clients: new Map() });
@@ -114,7 +118,7 @@ export async function GET(req: Request) {
     ...out(v.b),
     shifts: shiftsBy.get(key) ?? [],
     clients: [...v.clients.entries()]
-      .map(([id, b]) => ({ client_id: id, client: nameOf.get(id) ?? id, assigned_to: label(csrOf.get(id) ?? key), covered: (csrOf.get(id) ?? key) !== key, ...out(b) }))
+      .map(([id, b]) => { const owner = ownerOf.get(`${key}|${id}`) ?? csrOf.get(id) ?? key; return { client_id: id, client: nameOf.get(id) ?? id, assigned_to: label(owner), covered: owner !== key, ...out(b) }; })
       .sort((a, c) => c.leads - a.leads),
   })).sort((a, c) => c.leads - a.leads);
 
@@ -155,6 +159,6 @@ export async function GET(req: Request) {
     team: out(team),
     setters,
     ...(wantLeads ? { leads: leadRows, leads_filter: onlyMissed ? 'missed' : 'all' } : {}),
-    definition: `A new lead is a contact with a campaign REF tag and a phone number that arrived while its client's assigned setter (or cover) was on shift. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored rate. Connected = a completed 60s+ call within ${SPEED_TO_LEAD_MINUTES} min. A lead that paid a deposit within ${SPEED_TO_LEAD_MINUTES} min before any dial self-booked and is excluded. Target ${SPEED_TARGET_PCT}%.`,
+    definition: `A new lead is a contact with a campaign REF tag and a phone number that arrived while its client's assigned setter (or cover) was on shift. ${SPEED_WINDOW_TEXT} Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored rate. Connected = a completed 60s+ call within ${SPEED_TO_LEAD_MINUTES} min. A lead that paid a deposit within ${SPEED_TO_LEAD_MINUTES} min before any dial self-booked and is excluded. Target ${SPEED_TARGET_PCT}%.`,
   });
 }

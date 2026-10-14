@@ -1,4 +1,8 @@
 import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
+import { requireUser, canView, firstAllowedView, type CurrentUser } from '@/lib/auth';
+import { AdminPanel } from '@/components/AdminPanel';
+import { getAdminUsers, getRoles } from '@/lib/userAdmin';
 import {
   PoundSterling, Users, TrendingDown, UserCheck, DollarSign, Sparkles,
   Percent, Eye, ShoppingCart,
@@ -13,10 +17,10 @@ import { GaugeCard } from '@/components/GaugeCard';
 import { FunnelStrip, type FunnelStripData } from '@/components/FunnelStrip';
 import { ClientTableV2 } from '@/components/ClientTableV2';
 import { CampaignExplorer } from '@/components/CampaignExplorer';
-import { PlaceholderView } from '@/components/PlaceholderView';
 import { FunnelAnalyticsView } from '@/components/FunnelAnalyticsView';
-import { CallTrackingView, type CallOverviewRow, type CallDetail } from '@/components/CallTrackingView';
-import type { SetterCard } from '@/lib/csrMetrics';
+import { CsrDashboardView, type CallOverviewRow, type CallDetail, type CsrKey, type CsrPart } from '@/components/CsrDashboardView';
+import type { SetterCard, LeadEval } from '@/lib/csrMetrics';
+import { getBookingsBoard, type BookingsBoard } from '@/lib/csrBookings';
 import { BookingsView } from '@/components/BookingsView';
 import { AllBookingsView } from '@/components/AllBookingsView';
 import { KpisView } from '@/components/KpisView';
@@ -30,8 +34,8 @@ import {
 } from '@/lib/queries';
 import { getAdminClients } from '@/lib/clientAdmin';
 import { getAdminFunnels } from '@/lib/funnelAdmin';
-import { getClientSpeed, getClientSpeedRows, getSetterScorecard } from '@/lib/csrMetrics';
-import { setterClients } from '@/lib/csrConstants';
+import { getClientSpeed, getClientSpeedRows, getSetterScorecard, evaluateLeads } from '@/lib/csrMetrics';
+import { setterClients, CSR_SETTERS } from '@/lib/csrConstants';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 
@@ -39,7 +43,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
-type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; ctab?: string };
+type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; csr?: string; part?: string };
 
 function parseView(v: string | undefined): View {
   const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
@@ -72,23 +76,56 @@ function paramsRange(params: SearchParams) {
 // MainContent keys its own output on the params, so each view still mounts fresh.
 export default async function Page({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
+  const user = await requireUser();
   const range = paramsRange(params);
   const view = parseView(params.view);
+
+  // Page access. A page the user's role doesn't list sends them to the first one it does
+  // (a CSR lands on the CSR Dashboard). The view's own data is never loaded for them.
+  const reroute = (next: Record<string, string | undefined>) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(next)) if (v) p.set(k, v);
+    redirect(`/?${p.toString()}`);
+  };
+  // Bookings is archived and has no role page of its own: admins only.
+  if (!canView(user, view === 'bookings' ? 'admin' : view)) {
+    const first = firstAllowedView(user);
+    if (!first) redirect('/login?error=no-profile');
+    reroute({ view: first === 'overview' ? undefined : first, since: params.since, until: params.until });
+  }
+  // CSR scope: a CSR sees the CSR Team view and their own dashboard, not other setters'.
+  // Their CSR Dashboard home shows just those two cards. Account detail stays open
+  // (accounts are on the Team view).
+  const own = csrScope(user);
+  if (view === 'calls' && own !== undefined) {
+    const allowed = !params.csr || params.csr === 'team' || (own !== null && params.csr === own);
+    if (!allowed && !params.client) reroute({ view: 'calls', csr: own ?? 'team', part: params.csr ? undefined : params.part, since: params.since, until: params.until });
+  }
+
   const scopedClient = view === 'client' ? (params.client?.trim() || undefined) : undefined;
   const clients = await getClientList();
   return (
     <div className="flex min-h-screen bg-bg text-fg">
-      <Sidebar view={view} selectedClient={scopedClient} since={range.since} until={range.until} clients={clients} />
+      <Sidebar view={view} selectedClient={scopedClient} since={range.since} until={range.until} clients={clients}
+        pages={user.pages} userName={user.name || user.email} userRole={user.roleLabel} />
       <NavMain className="min-w-0 flex-1">
         <Suspense fallback={<ContentLoader />}>
-          <MainContent params={params} clients={clients} />
+          <MainContent params={params} clients={clients} user={user} />
         </Suspense>
       </NavMain>
     </div>
   );
 }
 
-async function MainContent({ params, clients }: { params: SearchParams; clients: ClientOption[] }) {
+// undefined = no restriction (admins and non-CSR roles). Otherwise the setter key a CSR may
+// see besides the team view, or null for a CSR whose user isn't linked to a setter yet.
+function csrScope(user: CurrentUser): string | null | undefined {
+  if (user.isAdmin) return undefined;
+  if (user.role === 'csr' || user.csrKey) return user.csrKey ?? null;
+  return undefined;
+}
+
+async function MainContent({ params, clients, user }: { params: SearchParams; clients: ClientOption[]; user: CurrentUser }) {
   const range = paramsRange(params);
   const clientFilter = params.client?.trim() || undefined;
   const funnelFilter = params.funnel?.trim() || undefined;
@@ -143,24 +180,39 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     : [];
   const funnelMetricsList = await Promise.all(funnelsToShow.map(f => getFunnelMetrics(f, range)));
 
-  // Call Tracking — Speed to Lead, in two views of the same leads: by client (with a
-  // drill-in to one client's lead log) and by setter. Only B2C clients with an assigned,
-  // tracked setter are measured.
-  const ctab = params.ctab === 'setters' || params.ctab === 'shifts' ? 'setters' : 'clients';
+  // CSR Dashboard (the 'calls' view): the team and each setter, each with Bookings against
+  // target and Speed to Lead, both opening a per-account breakdown. ?csr= picks whose
+  // dashboard (team | setter key), ?part= the breakdown (bookings | stl), ?client= one
+  // account's full Speed to Lead detail. Only B2C clients with an assigned, tracked setter
+  // are measured for Speed to Lead; bookings cover every B2C client.
+  const csrKeys = ['team', ...CSR_SETTERS.map(s => s.key)];
+  const csrSel: CsrKey | null = csrKeys.includes(params.csr ?? '') ? params.csr! : null;
+  const csrPart: CsrPart | null = csrSel && (params.part === 'bookings' || params.part === 'stl') ? params.part : null;
   let callsOverview: CallOverviewRow[] = [];
   let callsDetail: CallDetail | null = null;
   let callsSetters: SetterCard[] = [];
+  let callsLeads: LeadEval[] = [];
+  let csrBookings: BookingsBoard | null = null;
   if (view === 'calls') {
     const measured = setterClients(clients).map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null }));
     const detailClient = callsClient ? clients.find(c => c.client_id === callsClient) : undefined;
     if (detailClient) {
       callsDetail = { client: detailClient, speed: await getClientSpeed(detailClient.client_id, range) };
-    } else if (ctab === 'setters') {
-      callsSetters = await getSetterScorecard(measured, range);
     } else {
-      const rows = await getClientSpeedRows(measured, range);
+      // One evaluation of every lead feeds the team rows, the setter cards and the lead lists.
+      const needsSpeed = csrPart !== 'bookings';
+      const leads = needsSpeed ? await evaluateLeads(measured, range) : [];
+      const [rows, setters, board] = await Promise.all([
+        needsSpeed ? getClientSpeedRows(measured, range, leads) : Promise.resolve([]),
+        needsSpeed ? getSetterScorecard(measured, range, leads) : Promise.resolve([]),
+        csrPart !== 'stl' ? getBookingsBoard(clients, range.until) : Promise.resolve(null),
+      ]);
       const byId = new Map(clients.map(c => [c.client_id, c]));
       callsOverview = rows.map(r => ({ client: byId.get(r.client_id)!, row: r })).filter(r => !!r.client);
+      callsSetters = setters;
+      csrBookings = board;
+      // Only the breakdown lists individual leads; send just the ones it can show.
+      if (csrPart === 'stl') callsLeads = csrSel === 'team' ? leads : leads.filter(l => l.responsible === csrSel);
     }
   }
 
@@ -202,6 +254,9 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     [kpiRows, kpiDaily, kpiSyncAgeHours, kpiSpeed] = await Promise.all([getCsrScorecard(kpiMonth), getCsrDaily(kpiMonth), getSheetSyncAgeHours(), getCsrSpeedToLead(kpiMonth)]);
   }
 
+  // Admin Panel: the people with access and what each role can open.
+  const adminData = view === 'admin' ? { users: await getAdminUsers(), roles: await getRoles() } : null;
+
   const activeClient = scopedClient ? clients.find(c => c.client_id === scopedClient) : null;
   const callsClientName = callsClient ? clients.find(c => c.client_id === callsClient)?.client_name : null;
 
@@ -209,7 +264,7 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
     overview: { title: 'Portfolio Overview', subtitle: `${rows.length} clients · ${range.label.toLowerCase()}` },
     client: { title: 'Client View', subtitle: activeClient?.client_name ?? 'No client selected' },
     funnel: { title: 'Funnel Analytics', subtitle: 'Aggregate funnel performance' },
-    calls: { title: 'Call Tracking', subtitle: callsClientName ?? 'Speed to Lead across clients' },
+    calls: { title: 'CSR Dashboard', subtitle: callsClientName ?? (csrSel ? (csrSel === 'team' ? 'CSR Team' : CSR_SETTERS.find(s => s.key === csrSel)?.label ?? null) : 'Bookings and Speed to Lead') },
     bookings: { title: 'Bookings', subtitle: bookingsClientName },
     kpis: { title: 'KPIs', subtitle: 'Team performance by role' },
     clients: { title: 'Clients', subtitle: 'Manage client accounts and team access' },
@@ -255,12 +310,16 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
           />
         )}
         {view === 'calls' && (
-          <CallTrackingView
+          <CsrDashboardView
+            visible={csrScope(user) === undefined ? null : ['team', ...(csrScope(user) ? [csrScope(user)!] : [])]}
+            csr={csrSel}
+            part={csrPart}
             overview={callsOverview}
             detail={callsDetail}
             setters={callsSetters}
+            leads={callsLeads}
+            bookings={csrBookings ?? EMPTY_BOARD(range.until)}
             clients={clients}
-            tab={ctab}
             since={range.since}
             until={range.until}
           />
@@ -287,10 +346,15 @@ async function MainContent({ params, clients }: { params: SearchParams; clients:
         )}
         {view === 'kpis' && <KpisView rows={kpiRows} months={kpiMonths} month={kpiMonth} daily={kpiDaily} syncAgeHours={kpiSyncAgeHours} speed={kpiSpeed} />}
         {view === 'clients' && <ClientsView clients={adminClients} />}
-        {view === 'admin' && <PlaceholderView title="Admin Panel" subtitle="Team, integrations and workspace settings" />}
+        {view === 'admin' && adminData && <AdminPanel users={adminData.users} roles={adminData.roles} currentUserId={user.id} />}
     </Fragment>
   );
 }
+
+// Stand-in for the bookings board on screens that don't show bookings.
+const EMPTY_BOARD = (until: string): BookingsBoard => ({
+  available: true, month: `${until.slice(0, 7)}-01`, until, weekSince: until, daysInMonth: 30, dayOfMonth: 1, daysIntoWeek: 1, accounts: [], unmatched: [], syncAgeHours: null,
+});
 
 // Placeholder portfolio targets (monthly). Per-client targets + ad budgets will
 // come from the client-config panel — for now these drive the gauge fills so the

@@ -69,13 +69,16 @@ type MetaAction = { action_type?: string; value?: string };
 // any query builder via .range() until we get a partial page (signalling end of data).
 // All time-bucketed queries against meta_daily_stats / ghl_contacts / ghl_opportunities
 // MUST go through this — we have 6,000+ rows in 30 days for Meta alone.
+// Pages are ordered by id (every table read here has one, as a tiebreaker after any order
+// the query sets itself): without a stable ORDER BY, Postgres may return rows in a
+// different order per page, so pages overlap and rows are skipped or counted twice.
 async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
   const PAGE = 1000;
   const out: T[] = [];
   let from = 0;
   // Hard cap to prevent runaway loops if a query goes wrong.
   for (let i = 0; i < 50; i++) {
-    const { data, error } = await buildQuery().range(from, from + PAGE - 1);
+    const { data, error } = await buildQuery().order('id').range(from, from + PAGE - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
     out.push(...(data as T[]));
@@ -961,7 +964,7 @@ export async function getFunnelList(): Promise<FunnelListItem[]> {
 }
 
 // segment: 'b2b' clients (UNCAHP's own funnels) are listed but left out of portfolio totals.
-export type ClientOption = { client_id: string; client_name: string; logo_url?: string | null; segment?: 'b2c' | 'b2b'; csr_key?: string | null };
+export type ClientOption = { client_id: string; client_name: string; logo_url?: string | null; segment?: 'b2c' | 'b2b'; csr_key?: string | null; monthly_booking_target?: number | null };
 
 // Active clients from the registry (the source of truth). client_id here is the
 // GHL location id — the canonical key the rest of the app joins on. Only clients
@@ -975,8 +978,10 @@ export async function getActiveClients(): Promise<ClientOption[]> {
     .eq('status', 'active')
     .not('ghl_location_id', 'is', null)
     .order('client_name');
-  // segment arrives with migration 0017; fall back without it until it's run.
-  let res = await q('client_name, ghl_location_id, logo_url, segment, csr_key');
+  // segment (0017), csr_key (0019) and monthly_booking_target (0020) arrive with
+  // migrations; fall back without them until they're run.
+  let res = await q('client_name, ghl_location_id, logo_url, segment, csr_key, monthly_booking_target');
+  if (res.error) res = await q('client_name, ghl_location_id, logo_url, segment, csr_key');
   if (res.error) res = await q('client_name, ghl_location_id, logo_url, segment');
   if (res.error) res = await q('client_name, ghl_location_id, logo_url');
   if (res.error) throw res.error;
@@ -987,6 +992,7 @@ export async function getActiveClients(): Promise<ClientOption[]> {
     logo_url: (r.logo_url as string | null) ?? null,
     segment: (r.segment === 'b2b' ? 'b2b' : 'b2c') as 'b2c' | 'b2b',
     csr_key: (r.csr_key as string | null) ?? null,
+    monthly_booking_target: (r.monthly_booking_target as number | null) ?? null,
   }));
 }
 
