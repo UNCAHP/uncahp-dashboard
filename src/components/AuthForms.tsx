@@ -6,6 +6,11 @@ import { signInAction, requestResetAction, setPasswordAction, type AuthFormState
 import { cn } from '@/lib/utils';
 
 const initial: AuthFormState = { ok: false };
+
+// "Forgot password?" is hidden until Supabase's Site URL points at the live dashboard —
+// until then its reset emails link to localhost. Admins send reset links from the Admin
+// Panel meanwhile. Flip to true once the Supabase URL Configuration is fixed.
+const SELF_SERVE_RESET = false;
 const inputCls = 'w-full rounded-lg border border-border bg-surface-2 px-3 py-2.5 text-sm text-fg placeholder:text-fg-dim';
 
 export function AuthCard({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
@@ -78,7 +83,7 @@ export function SignInForm({ next, notice }: { next: string; notice?: string }) 
       <Field label="Password"><input name="password" type="password" autoComplete="current-password" required className={inputCls} /></Field>
       <Note state={signInState} />
       <Submit pending={signingIn}>Sign in</Submit>
-      <button type="button" onClick={() => setMode('reset')} className={cn('w-full text-center text-xs font-medium text-fg-muted transition-colors hover:text-pink')}>Forgot password?</button>
+      {SELF_SERVE_RESET && <button type="button" onClick={() => setMode('reset')} className={cn('w-full text-center text-xs font-medium text-fg-muted transition-colors hover:text-pink')}>Forgot password?</button>}
     </form>
   );
 }
