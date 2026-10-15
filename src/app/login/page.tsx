@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 const NOTICES: Record<string, string> = {
   'no-profile': 'Your account isn’t set up for the dashboard yet. Ask an admin to give you access.',
   inactive: 'Your access has been turned off. Ask an admin if this is a mistake.',
-  link: 'That link has expired, was already used, or was opened in a different browser from the one that asked for it. Request a new reset link, or ask an admin for one.',
+  link: 'That link has expired or was already used. Ask an admin for a new one.',
 };
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string; error?: string }> }) {

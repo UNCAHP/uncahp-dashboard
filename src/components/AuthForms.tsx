@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { signInAction, requestResetAction, setPasswordAction, type AuthFormState } from '@/app/actions/auth';
+import { signInAction, requestResetAction, setPasswordAction, confirmLinkAction, type AuthFormState } from '@/app/actions/auth';
 import { cn } from '@/lib/utils';
 
 const initial: AuthFormState = { ok: false };
@@ -96,6 +96,18 @@ export function SetPasswordForm() {
       <Field label="Confirm password"><input name="confirm" type="password" autoComplete="new-password" minLength={10} required className={inputCls} /></Field>
       <Note state={state} />
       <Submit pending={pending}>Save and continue</Submit>
+    </form>
+  );
+}
+
+export function ConfirmLinkForm({ tokenHash, type }: { tokenHash: string; type: 'invite' | 'recovery' }) {
+  const [state, action, pending] = useActionState(confirmLinkAction, initial);
+  return (
+    <form action={action} className="space-y-4">
+      <input type="hidden" name="token_hash" value={tokenHash} />
+      <input type="hidden" name="type" value={type} />
+      <Note state={state} />
+      <Submit pending={pending}>{type === 'invite' ? 'Continue and set my password' : 'Continue'}</Submit>
     </form>
   );
 }

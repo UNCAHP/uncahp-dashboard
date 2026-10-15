@@ -59,3 +59,15 @@ export async function setPasswordAction(_prev: AuthFormState, fd: FormData): Pro
   if (error) return { ok: false, error: error.message };
   redirect('/');
 }
+
+// Redeems an invite or reset link's one-time token (from /auth/confirm, on the person's
+// click — never on page load, which link previews would trigger), then on to a password.
+export async function confirmLinkAction(_prev: AuthFormState, fd: FormData): Promise<AuthFormState> {
+  const tokenHash = String(fd.get('token_hash') ?? '');
+  const type = fd.get('type') === 'recovery' ? 'recovery' : 'invite';
+  if (!tokenHash) return { ok: false, error: 'This link is incomplete. Ask an admin for a new one.' };
+  const auth = await createAuthClient();
+  const { error } = await auth.auth.verifyOtp({ type, token_hash: tokenHash });
+  if (error) return { ok: false, error: 'This link has expired or was already used. Ask an admin for a new one.' };
+  redirect('/auth/set-password');
+}
