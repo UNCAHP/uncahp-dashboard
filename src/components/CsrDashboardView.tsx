@@ -10,7 +10,8 @@ import type { ClientOption } from '@/lib/queries';
 import type { ClientSpeed, ClientSpeedRow, SetterCard, ShiftRow, LeadEval } from '@/lib/csrMetrics';
 import type { BookingsBoard, AccountBookings, BookingCount } from '@/lib/csrBookings';
 import { SPEED_TO_LEAD_MINUTES, CSR_SETTERS, SPEED_TARGET_PCT, SPEED_TARGET_TEXT, SPEED_WINDOW_TEXT, isTrackedSetter } from '@/lib/csrConstants';
-import { syncClientCallsAction } from '@/app/actions/sync';
+import { syncClientCallsAction, syncSheetAction } from '@/app/actions/sync';
+import { useRouter } from 'next/navigation';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { InfoTip } from '@/components/InfoTip';
 import { Tooltip } from '@/components/Tooltip';
@@ -109,6 +110,10 @@ function bookingsFor(accounts: AccountBookings[]): BookingTotals {
   return t;
 }
 
+// Team: every tab combined. A setter: their own tab only (csrBookings header).
+const accountsFor = (board: BookingsBoard, key: CsrKey): AccountBookings[] =>
+  key === 'team' ? board.accounts : board.setters?.[key] ?? [];
+
 type Track = 'on' | 'off' | 'none';
 const trackOf = (booked: number, pace: number | null, hasTarget: boolean): Track =>
   !hasTarget || pace == null ? 'none' : booked >= Math.floor(pace) ? 'on' : 'off';
@@ -153,7 +158,8 @@ function SplitBar({ c, className }: { c: BookingCount; className?: string }) {
 function syncNote(board: BookingsBoard): string {
   const h = board.syncAgeHours;
   if (h == null) return 'Tracker sheet not synced yet';
-  return `Tracker sheet synced ${h < 1 ? 'under an hour' : h < 24 ? `${Math.floor(h)}h` : `${Math.floor(h / 24)}d`} ago`;
+  const m = Math.floor(h * 60);
+  return `Tracker sheet synced ${m < 1 ? 'just now' : m < 60 ? `${m} min` : h < 24 ? `${Math.floor(h)}h` : `${Math.floor(h / 24)}d`} ago`;
 }
 
 // ─── The dashboard ───────────────────────────────────────────────────────────
@@ -233,7 +239,7 @@ function Home({ visible, overview, setters, bookings, monthName, href }: {
   return (
     <div className="grid gap-5 md:grid-cols-2 2xl:grid-cols-4">
       {people.map(key => {
-        const accounts = key === 'team' ? bookings.accounts : bookings.accounts.filter(a => a.csr === key);
+        const accounts = accountsFor(bookings, key);
         const b = bookingsFor(accounts);
         const s = speedFor(key, overview, setters);
         const hasTarget = b.withTarget > 0;
@@ -243,7 +249,7 @@ function Home({ visible, overview, setters, bookings, monthName, href }: {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-xl font-bold tracking-tight text-fg">{personLabel(key)}</h2>
-                <p className="mt-0.5 text-xs text-fg-muted">{key === 'team' ? 'All accounts combined' : plural(accounts.length, 'account')}</p>
+                <p className="mt-0.5 text-xs text-fg-muted">{key === 'team' ? 'All accounts combined' : plural(accounts.filter(a => !a.cover).length, 'account')}</p>
               </div>
               <ChevronRight size={18} className="mt-1 text-fg-dim transition-transform group-hover:translate-x-0.5 group-hover:text-pink" />
             </div>
@@ -287,7 +293,7 @@ function Person({ csr, overview, setters, bookings, monthName, href }: {
   csr: CsrKey; overview: CallOverviewRow[]; setters: SetterCard[]; bookings: BookingsBoard; monthName: string;
   href: (n: { csr?: CsrKey | null; part?: CsrPart | null }) => string;
 }) {
-  const accounts = csr === 'team' ? bookings.accounts : bookings.accounts.filter(a => a.csr === csr);
+  const accounts = accountsFor(bookings, csr);
   const b = bookingsFor(accounts);
   const s = speedFor(csr, overview, setters);
   const hasTarget = b.withTarget > 0;
@@ -298,7 +304,7 @@ function Person({ csr, overview, setters, bookings, monthName, href }: {
   return (
     <div className="grid items-stretch gap-6 xl:grid-cols-2">
       <NavLink href={href({ csr, part: 'bookings' })} className="group flex flex-col rounded-2xl border border-border bg-surface p-6 transition-colors hover:border-pink/50">
-        <PanelHead icon={CalendarCheck} title="Bookings" sub={`${monthName} · ${plural(accounts.length, 'account')}`} />
+        <PanelHead icon={CalendarCheck} title="Bookings" sub={`${monthName} · ${plural(accounts.filter(a => !a.cover).length, 'account')}`} />
         <div className="mt-6 grid gap-6 sm:grid-cols-2">
           <div>
             <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-fg-muted">This month <TrackChip t={monthTrack} /></div>
@@ -370,7 +376,7 @@ function BookingsFootnote({ board, b }: { board: BookingsBoard; b: BookingTotals
 
 function BookingsAccounts({ csr, bookings, clients, monthName }: { csr: CsrKey; bookings: BookingsBoard; clients: ClientOption[]; monthName: string }) {
   const byId = useMemo(() => new Map(clients.map(c => [c.client_id, c])), [clients]);
-  const accounts = csr === 'team' ? bookings.accounts : bookings.accounts.filter(a => a.csr === csr);
+  const accounts = accountsFor(bookings, csr);
   const b = bookingsFor(accounts);
   // Furthest behind first; accounts with no target, then no bookings, at the bottom.
   const rows = [...accounts].sort((x, y) => {
@@ -425,7 +431,7 @@ function BookingsAccounts({ csr, bookings, clients, monthName }: { csr: CsrKey; 
               const track = trackOf(a.month.total, a.monthPace, a.target != null);
               return (
                 <tr key={a.client_id} className={cn('border-b border-border/60 last:border-0', a.month.total === 0 && a.target == null && 'text-fg-dim')}>
-                  <td className="px-5 py-3"><span className="inline-flex items-center gap-3">{c && <Badge c={c} />}<span className="font-medium text-fg">{a.client_name}</span></span></td>
+                  <td className="px-5 py-3"><span className="inline-flex items-center gap-3">{c && <Badge c={c} />}<span className="font-medium text-fg">{a.client_name}</span>{a.cover && <span className="rounded bg-border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-fg-muted">cover</span>}</span></td>
                   {csr === 'team' && <td className="px-3 py-3 text-fg-muted">{setterLabel(a.csr)}</td>}
                   <td className="px-3 py-3 text-right font-mono tabular-nums text-fg-muted">{a.target ?? '—'}</td>
                   <td className="px-3 py-3 text-right font-mono text-base font-semibold tabular-nums text-fg">{a.month.total}</td>
@@ -443,16 +449,36 @@ function BookingsAccounts({ csr, bookings, clients, monthName }: { csr: CsrKey; 
         </table>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-xs text-fg-dim">
         {[
           !bookings.available ? 'Per-account bookings appear once migration 0020 has run' : '',
           b.withTarget < b.accounts ? 'Set monthly targets on each client in Clients' : '',
           csr === 'team' && bookings.unmatched.length ? `Sheet columns with no matching client: ${bookings.unmatched.map(u => `${u.account} (${u.total})`).join(', ')}` : '',
-          csr !== 'team' ? 'Counts every booking on these accounts, including cover by other setters' : '',
+          csr !== 'team' ? `From ${personLabel(csr)}’s own tab in the tracker sheet; accounts marked cover aren’t theirs and have no target` : '',
           syncNote(bookings),
         ].filter(Boolean).join(' · ')}
       </p>
+      <SheetSyncButton />
+      </div>
     </>
+  );
+}
+
+// Pull the tracker sheet now, instead of waiting for the background refresh.
+function SheetSyncButton() {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const run = () => start(async () => {
+    const res = await syncSheetAction();
+    if (res.ok) { toast.success('Tracker sheet synced'); router.refresh(); }
+    else toast.error('Sheet sync failed', { description: res.error });
+  });
+  return (
+    <button onClick={run} disabled={pending}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted transition-colors hover:border-border-strong hover:text-fg disabled:opacity-50">
+      {pending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Sync sheet
+    </button>
   );
 }
 

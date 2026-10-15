@@ -1,6 +1,7 @@
 'use server';
 
 import { requirePage } from '@/lib/auth';
+import { syncSheetBookings } from '@/lib/sheetBookingsSync';
 import { revalidatePath } from 'next/cache';
 import { syncClientMeta, type MetaSyncResult } from '@/lib/metaSync';
 import { syncClientGhl, type GhlSyncResult } from '@/lib/ghlSync';
@@ -38,4 +39,13 @@ export async function syncClientCallsAction(ghlLocationId: string, days = 30): P
     console.error('syncClientCallsAction failed:', e);
     return { ok: false, error: e instanceof Error ? e.message : 'Unexpected error syncing calls.' };
   }
+}
+
+// "Sync sheet" on the CSR Dashboard: pull the Appointment Setting Tracker now.
+export async function syncSheetAction(): Promise<{ ok: boolean; error?: string; tabs?: number }> {
+  await requirePage('calls');
+  const res = await syncSheetBookings().catch(e => ({ ok: false as const, error: e instanceof Error ? e.message : 'sheet sync error' }));
+  if (!res.ok) return { ok: false, error: res.error };
+  revalidatePath('/');
+  return { ok: true, tabs: 'tabsMatched' in res ? res.tabsMatched : undefined };
 }

@@ -377,13 +377,20 @@ export async function syncSheetBookings(): Promise<SheetBookingsSyncResult> {
   };
 }
 
-// Replace each synced tab's account cells wholesale: delete that setter's month, then
-// insert what the sheet holds now, so a cell cleared in the sheet disappears here too.
-// The table arrives with migration 0020; before that, report it and carry on.
+// Replace each synced tab's account cells wholesale, so a cell cleared in the sheet
+// disappears here too. Done in one transaction by replace_csr_sheet_cells (migration 0022),
+// which also serialises overlapping syncs — the CSR Dashboard triggers a background sync
+// when the data is stale, so two can run at once. Before 0022 has run, fall back to
+// delete-then-insert as separate requests.
 async function writeAccountRows(
   tabMonths: Array<{ setter_key: string; period_month: string }>,
   rows: Array<Record<string, unknown>>,
 ): Promise<{ accountRowsWritten?: number; accountNote?: string }> {
+  const rpc = await supabaseAdmin.rpc('replace_csr_sheet_cells', { p_tabs: tabMonths, p_rows: rows });
+  if (!rpc.error) return { accountRowsWritten: Number(rpc.data ?? rows.length) };
+  if (!/replace_csr_sheet_cells|PGRST202|function/i.test(rpc.error.message)) {
+    return { accountNote: `per-account swap failed: ${rpc.error.message}` };
+  }
   for (const t of tabMonths) {
     const { error } = await supabaseAdmin
       .from('csr_sheet_client_daily')
@@ -397,4 +404,19 @@ async function writeAccountRows(
     if (error) return { accountNote: `per-account insert failed: ${error.message}` };
   }
   return { accountRowsWritten: rows.length };
+}
+
+// ─── Keeping it fresh ────────────────────────────────────────────────────────
+// The daily cron syncs at 06:00, but setters log bookings all day. The CSR Dashboard calls
+// this on every load; it starts a background sync when the last one is over 15 minutes
+// old. One per server instance at a time; overlaps across instances are made safe by
+// replace_csr_sheet_cells.
+export const SHEET_STALE_MINUTES = 15;
+let running: Promise<unknown> | null = null;
+export function syncSheetIfStale(ageHours: number | null): Promise<unknown> | null {
+  if (running || (ageHours != null && ageHours * 60 < SHEET_STALE_MINUTES)) return null;
+  running = syncSheetBookings()
+    .catch(e => console.error('[sheet] background sync failed:', e))
+    .finally(() => { running = null; });
+  return running;
 }

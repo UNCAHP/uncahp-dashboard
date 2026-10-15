@@ -1,5 +1,7 @@
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { after } from 'next/server';
+import { syncSheetIfStale } from '@/lib/sheetBookingsSync';
 import { requireUser, canView, firstAllowedView, type CurrentUser } from '@/lib/auth';
 import { AdminPanel } from '@/components/AdminPanel';
 import { getAdminUsers, getRoles } from '@/lib/userAdmin';
@@ -211,6 +213,12 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
       callsOverview = rows.map(r => ({ client: byId.get(r.client_id)!, row: r })).filter(r => !!r.client);
       callsSetters = setters;
       csrBookings = board;
+      // Setters log bookings all day; refresh the sheet in the background once the data is
+      // over 15 minutes old. This load shows what's stored; the next one shows the update.
+      if (board?.available) {
+        const age = board.syncAgeHours;
+        after(async () => { await syncSheetIfStale(age); });
+      }
       // Only the breakdown lists individual leads; send just the ones it can show.
       if (csrPart === 'stl') callsLeads = csrSel === 'team' ? leads : leads.filter(l => l.responsible === csrSel);
     }
@@ -353,7 +361,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
 
 // Stand-in for the bookings board on screens that don't show bookings.
 const EMPTY_BOARD = (until: string): BookingsBoard => ({
-  available: true, month: `${until.slice(0, 7)}-01`, until, weekSince: until, daysInMonth: 30, dayOfMonth: 1, daysIntoWeek: 1, accounts: [], unmatched: [], syncAgeHours: null,
+  available: true, month: `${until.slice(0, 7)}-01`, until, weekSince: until, daysInMonth: 30, dayOfMonth: 1, daysIntoWeek: 1, accounts: [], setters: {}, unmatched: [], syncAgeHours: null,
 });
 
 // Placeholder portfolio targets (monthly). Per-client targets + ad budgets will

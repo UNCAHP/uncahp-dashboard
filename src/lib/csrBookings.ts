@@ -5,10 +5,13 @@ import { getAssignmentHistory, ownerOn } from './csrAssignments';
 // ─── CSR Dashboard: bookings per account against its monthly target ──────────
 //
 // Bookings come from the Appointment Setting Tracker sheet, cell by cell
-// (csr_sheet_client_daily, synced daily by sheetBookingsSync). An account's bookings are
-// everything logged against it on ANY setter's tab — cover bookings count towards the
-// account's target, because the target belongs to the account. A setter's view lists the
-// accounts assigned to them on the end date (client_csr_assignments, else clients.csr_key).
+// (csr_sheet_client_daily, synced by sheetBookingsSync). The sheet has one tab per setter
+// per month ("Cathy - October 2026"), and that tab is the record of what that setter booked:
+//   • Team view — every tab added together, per account.
+//   • A setter's view — ONLY their own tab. Their assigned accounts (owner on the end date,
+//     client_csr_assignments else clients.csr_key) are listed with the account's target;
+//     accounts they booked for as cover are listed too, without a target. So a setter's
+//     total always equals their tab's total.
 //
 // The period is the calendar month and the Monday-started week that contain the selected
 // end date, each counted up to that date. Targets are monthly (clients.monthly_booking_target);
@@ -29,6 +32,7 @@ export type AccountBookings = {
   week: BookingCount;             // Monday → end date
   monthPace: number | null;       // target pro rata to the end date
   weekPace: number | null;        // weekly target pro rata to the end date
+  cover?: boolean;                // setter view: an account they booked for that isn't theirs
 };
 
 export type BookingsBoard = {
@@ -39,7 +43,8 @@ export type BookingsBoard = {
   daysInMonth: number;
   dayOfMonth: number;
   daysIntoWeek: number;           // 1 (Monday) … 7
-  accounts: AccountBookings[];    // every active B2C client, matched or not
+  accounts: AccountBookings[];    // every active B2C client, all tabs combined (Team view)
+  setters: Record<string, AccountBookings[]>; // per setter: their own tab only (see header)
   unmatched: { account: string; total: number }[]; // sheet columns no client matched
   syncAgeHours: number | null;
 };
@@ -70,13 +75,13 @@ export async function getBookingsBoard(clients: ClientOption[], until: string): 
   const b2c = clients.filter(c => c.segment !== 'b2b');
   const board: BookingsBoard = {
     available: true, month, until, weekSince, daysInMonth, dayOfMonth, daysIntoWeek,
-    accounts: [], unmatched: [], syncAgeHours: null,
+    accounts: [], setters: {}, unmatched: [], syncAgeHours: null,
   };
 
   const [cells, synced, history] = await Promise.all([
     supabaseAdmin
       .from('csr_sheet_client_daily')
-      .select('booking_date, account, manual_bookings, lp_bookings, total_bookings')
+      .select('setter_key, booking_date, account, manual_bookings, lp_bookings, total_bookings')
       .gte('booking_date', from)
       .lte('booking_date', until)
       .limit(10_000),
@@ -101,7 +106,10 @@ export async function getBookingsBoard(clients: ClientOption[], until: string): 
     }
     map.set(id, c);
   };
-  type Cell = { booking_date: string; account: string; manual_bookings: number | null; lp_bookings: number | null; total_bookings: number };
+  // The same counts per setter tab, keyed `${setter}|${client}`.
+  const sMonth = new Map<string, BookingCount>();
+  const sWeek = new Map<string, BookingCount>();
+  type Cell = { setter_key: string; booking_date: string; account: string; manual_bookings: number | null; lp_bookings: number | null; total_bookings: number };
   for (const r of (cells.data ?? []) as Cell[]) {
     const id = byKey.get(accountKey(r.account));
     const date = String(r.booking_date);
@@ -109,8 +117,9 @@ export async function getBookingsBoard(clients: ClientOption[], until: string): 
       if (date >= month) unmatched.set(r.account, (unmatched.get(r.account) ?? 0) + r.total_bookings);
       continue;
     }
-    if (date >= month) add(month_, id, r);
-    if (date >= weekSince) add(week_, id, r);
+    const sk = `${r.setter_key}|${id}`;
+    if (date >= month) { add(month_, id, r); add(sMonth, sk, r); }
+    if (date >= weekSince) { add(week_, id, r); add(sWeek, sk, r); }
   }
 
   const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -129,6 +138,29 @@ export async function getBookingsBoard(clients: ClientOption[], until: string): 
       weekPace: weekTarget == null ? null : round1((weekTarget * daysIntoWeek) / 7),
     };
   });
+
+  // Each setter: their assigned accounts first (with targets), then any account their tab
+  // has bookings for that isn't theirs (cover, no target).
+  const setterKeys = new Set<string>([
+    ...board.accounts.map(a => a.csr).filter((k): k is string => !!k),
+    ...[...sMonth.keys(), ...sWeek.keys()].map(k => k.split('|')[0]),
+  ]);
+  for (const key of setterKeys) {
+    const own = board.accounts.filter(a => a.csr === key).map(a => ({
+      ...a,
+      month: sMonth.get(`${key}|${a.client_id}`) ?? empty(),
+      week: sWeek.get(`${key}|${a.client_id}`) ?? empty(),
+    }));
+    const ownIds = new Set(own.map(a => a.client_id));
+    const coverIds = new Set([...sMonth.keys(), ...sWeek.keys()].filter(k => k.startsWith(`${key}|`)).map(k => k.split('|')[1]).filter(id => !ownIds.has(id)));
+    const cover = board.accounts.filter(a => coverIds.has(a.client_id)).map(a => ({
+      ...a,
+      target: null, weekTarget: null, monthPace: null, weekPace: null, cover: true,
+      month: sMonth.get(`${key}|${a.client_id}`) ?? empty(),
+      week: sWeek.get(`${key}|${a.client_id}`) ?? empty(),
+    }));
+    board.setters[key] = [...own, ...cover];
+  }
   board.unmatched = [...unmatched].map(([account, total]) => ({ account, total })).sort((a, b) => b.total - a.total);
   return board;
 }
