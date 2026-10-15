@@ -9,7 +9,7 @@ import {
 import type { ClientOption } from '@/lib/queries';
 import type { ClientSpeed, ClientSpeedRow, SetterCard, ShiftRow, LeadEval } from '@/lib/csrMetrics';
 import type { BookingsBoard, AccountBookings, BookingCount } from '@/lib/csrBookings';
-import { SPEED_TO_LEAD_MINUTES, CSR_SETTERS, SPEED_TARGET_PCT, SPEED_TARGET_TEXT, SPEED_WINDOW_TEXT, isTrackedSetter } from '@/lib/csrConstants';
+import { SPEED_TO_LEAD_MINUTES, CSR_SETTERS, SPEED_TARGET_PCT, SPEED_TARGET_TEXT, SPEED_WINDOW_TEXT, TEAM_SPEED_EXCLUDES, TEAM_SPEED_EXCLUDED_NAMES, isTrackedSetter } from '@/lib/csrConstants';
 import { syncClientCallsAction, syncSheetAction } from '@/app/actions/sync';
 import { useRouter } from 'next/navigation';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
@@ -42,6 +42,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 const setterLabel = (key: string | null): string =>
   key ? (CSR_SETTERS.find(s => s.key === key)?.label ?? key.charAt(0).toUpperCase() + key.slice(1)) : 'Self booking';
 const personLabel = (key: CsrKey) => (key === 'team' ? 'CSR Team' : setterLabel(key));
+const teamSpeedNote = TEAM_SPEED_EXCLUDED_NAMES ? `Team rate leaves out ${TEAM_SPEED_EXCLUDED_NAMES}` : '';
 const selfBookedNote = (n: number) => (n ? `${n} self-booked within ${SPEED_TO_LEAD_MINUTES}m, not counted` : '');
 const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 const num1 = (n: number) => (Number.isInteger(n) ? `${n}` : n.toFixed(1));
@@ -62,10 +63,12 @@ const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-
 
 type SpeedTotals = { leads: number; attempted: number; connected: number; never: number; selfBooked: number; pct: number | null };
 
-function speedFor(key: CsrKey, overview: CallOverviewRow[], setters: SetterCard[]): SpeedTotals {
+function speedFor(key: CsrKey, setters: SetterCard[]): SpeedTotals {
   if (key === 'team') {
-    const t = overview.reduce((a, r) => ({
-      leads: a.leads + r.row.leads, attempted: a.attempted + r.row.attempted, connected: a.connected + r.row.connected, never: a.never + r.row.neverCalled, selfBooked: a.selfBooked + r.row.selfBooked,
+    // Every lead belongs to exactly one setter's card (the one responsible for it), so the
+    // cards add up to the team, minus the setters left out of the team rate.
+    const t = setters.filter(c => !TEAM_SPEED_EXCLUDES.includes(c.csr)).reduce((a, c) => ({
+      leads: a.leads + c.leads, attempted: a.attempted + c.attempted, connected: a.connected + c.connected, never: a.never + c.neverCalled, selfBooked: a.selfBooked + c.selfBooked,
     }), { leads: 0, attempted: 0, connected: 0, never: 0, selfBooked: 0 });
     return { ...t, pct: rateOf(t.attempted, t.leads) };
   }
@@ -206,10 +209,10 @@ export function CsrDashboardView({
 
   let body: React.ReactNode;
   if (detail) body = <Detail row={detail} />;
-  else if (!csr) body = <Home visible={visible} overview={overview} setters={setters} bookings={bookings} monthName={monthName} href={href} />;
+  else if (!csr) body = <Home visible={visible} setters={setters} bookings={bookings} monthName={monthName} href={href} />;
   else if (part === 'bookings') body = <BookingsAccounts csr={csr} bookings={bookings} clients={clients} monthName={monthName} />;
   else if (part === 'stl') body = <SpeedAccounts csr={csr} overview={overview} setters={setters} leads={leads} clients={clients} detailHref={id => href({ csr, part, client: id })} />;
-  else body = <Person csr={csr} overview={overview} setters={setters} bookings={bookings} monthName={monthName} href={href} />;
+  else body = <Person csr={csr} setters={setters} bookings={bookings} monthName={monthName} href={href} />;
 
   const heading = detail ? detail.client.client_name
     : !csr ? 'CSR Dashboard'
@@ -241,9 +244,9 @@ export function CsrDashboardView({
 
 // ─── Home: the team and each setter, one card each ───────────────────────────
 
-function Home({ visible, overview, setters, bookings, monthName, href }: {
+function Home({ visible, setters, bookings, monthName, href }: {
   visible: CsrKey[] | null;
-  overview: CallOverviewRow[]; setters: SetterCard[]; bookings: BookingsBoard; monthName: string;
+  setters: SetterCard[]; bookings: BookingsBoard; monthName: string;
   href: (n: { csr?: CsrKey | null; part?: CsrPart | null }) => string;
 }) {
   const people: CsrKey[] = ['team', ...CSR_SETTERS.map(s => s.key)].filter(k => !visible || visible.includes(k));
@@ -252,7 +255,7 @@ function Home({ visible, overview, setters, bookings, monthName, href }: {
       {people.map(key => {
         const accounts = accountsFor(bookings, key);
         const b = bookingsFor(accounts);
-        const s = speedFor(key, overview, setters);
+        const s = speedFor(key, setters);
         const hasTarget = b.withTarget > 0;
         return (
           <NavLink key={key} href={href({ csr: key })}
@@ -287,7 +290,7 @@ function Home({ visible, overview, setters, bookings, monthName, href }: {
               </div>
               <div className="mt-2 flex items-baseline gap-2">
                 <span className={cn('font-mono text-3xl font-bold tabular-nums', speedText(s.pct))}>{pct(s.pct)}</span>
-                <span className="text-xs text-fg-muted">{plural(s.leads, 'lead')}</span>
+                <span className="text-xs text-fg-muted">{plural(s.leads, 'lead')}{key === 'team' && TEAM_SPEED_EXCLUDED_NAMES && <> · excl. {TEAM_SPEED_EXCLUDED_NAMES}</>}</span>
               </div>
               <OutcomeBar leads={s.leads} attempted={s.attempted} neverCalled={s.never} connected={s.connected} className="mt-3" />
             </div>
@@ -300,13 +303,13 @@ function Home({ visible, overview, setters, bookings, monthName, href }: {
 
 // ─── One person: the two parts, each opening its own breakdown ───────────────
 
-function Person({ csr, overview, setters, bookings, monthName, href }: {
-  csr: CsrKey; overview: CallOverviewRow[]; setters: SetterCard[]; bookings: BookingsBoard; monthName: string;
+function Person({ csr, setters, bookings, monthName, href }: {
+  csr: CsrKey; setters: SetterCard[]; bookings: BookingsBoard; monthName: string;
   href: (n: { csr?: CsrKey | null; part?: CsrPart | null }) => string;
 }) {
   const accounts = accountsFor(bookings, csr);
   const b = bookingsFor(accounts);
-  const s = speedFor(csr, overview, setters);
+  const s = speedFor(csr, setters);
   const hasTarget = b.withTarget > 0;
   const monthTrack = trackOf(b.bookedTargeted, b.rangePace, hasTarget);
   const weekTrack = trackOf(b.weekBookedTargeted, b.weekPace, hasTarget);
@@ -356,7 +359,7 @@ function Person({ csr, overview, setters, bookings, monthName, href }: {
           <Stat label="Dialled late" value={late} dot="bg-yellow" />
           <Stat label="Never phoned" value={s.never} dot="bg-red" />
         </dl>
-        <p className="mt-auto border-t border-border pt-3 text-xs text-fg-dim">{[SPEED_WINDOW_TEXT, selfBookedNote(s.selfBooked)].filter(Boolean).join(' · ')}</p>
+        <p className="mt-auto border-t border-border pt-3 text-xs text-fg-dim">{[SPEED_WINDOW_TEXT, csr === 'team' ? teamSpeedNote : '', selfBookedNote(s.selfBooked)].filter(Boolean).join(' · ')}</p>
       </NavLink>
     </div>
   );
@@ -548,7 +551,7 @@ function SpeedAccounts({ csr, overview, setters, leads, clients, detailHref }: {
 }) {
   const byId = useMemo(() => new Map(clients.map(c => [c.client_id, c])), [clients]);
   const card = csr === 'team' ? null : setters.find(s => s.csr === csr) ?? null;
-  const s = speedFor(csr, overview, setters);
+  const s = speedFor(csr, setters);
   const [open, setOpen] = useState<string | null>(null);
 
   const rows: SpeedRow[] = csr === 'team'
@@ -582,7 +585,7 @@ function SpeedAccounts({ csr, overview, setters, leads, clients, detailHref }: {
             </dl>
           </div>
         </div>
-        <p className="mt-5 border-t border-border pt-3 text-xs text-fg-dim">{[SPEED_WINDOW_TEXT, card?.medianMinutes != null ? `Median ${card.medianMinutes}m to first dial` : '', selfBookedNote(s.selfBooked)].filter(Boolean).join(' · ')}</p>
+        <p className="mt-5 border-t border-border pt-3 text-xs text-fg-dim">{[SPEED_WINDOW_TEXT, csr === 'team' ? teamSpeedNote : '', card?.medianMinutes != null ? `Median ${card.medianMinutes}m to first dial` : '', selfBookedNote(s.selfBooked)].filter(Boolean).join(' · ')}</p>
       </section>
 
       {card && card.days.length > 0 && (

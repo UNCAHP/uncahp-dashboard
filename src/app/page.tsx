@@ -37,7 +37,7 @@ import {
 import { getAdminClients } from '@/lib/clientAdmin';
 import { getAdminFunnels } from '@/lib/funnelAdmin';
 import { getClientSpeed, getClientSpeedRows, getSetterScorecard, evaluateLeads } from '@/lib/csrMetrics';
-import { setterClients, CSR_SETTERS } from '@/lib/csrConstants';
+import { setterClients, CSR_SETTERS, CSR_MANAGES, TEAM_SPEED_EXCLUDES } from '@/lib/csrConstants';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 
@@ -95,13 +95,13 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
     if (!first) redirect('/login?error=no-profile');
     reroute({ view: first === 'overview' ? undefined : first, since: params.since, until: params.until });
   }
-  // CSR scope: a CSR sees the CSR Team view and their own dashboard, not other setters'.
-  // Their CSR Dashboard home shows just those two cards. Account detail stays open
-  // (accounts are on the Team view).
-  const own = csrScope(user);
-  if (view === 'calls' && own !== undefined) {
-    const allowed = !params.csr || params.csr === 'team' || (own !== null && params.csr === own);
-    if (!allowed && !params.client) reroute({ view: 'calls', csr: own ?? 'team', part: params.csr ? undefined : params.part, since: params.since, until: params.until });
+  // CSR scope: a CSR sees the CSR Team view and their own dashboard, plus those of any
+  // setters they manage (CSR_MANAGES), not other setters'. Their CSR Dashboard home shows
+  // just those cards. Account detail stays open (accounts are on the Team view).
+  const scope = csrScope(user);
+  if (view === 'calls' && scope !== undefined) {
+    const allowed = !params.csr || params.csr === 'team' || scope.includes(params.csr);
+    if (!allowed && !params.client) reroute({ view: 'calls', csr: scope[0] ?? 'team', part: params.csr ? undefined : params.part, since: params.since, until: params.until });
   }
 
   const scopedClient = view === 'client' ? (params.client?.trim() || undefined) : undefined;
@@ -119,12 +119,14 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   );
 }
 
-// undefined = no restriction (admins and non-CSR roles). Otherwise the setter key a CSR may
-// see besides the team view, or null for a CSR whose user isn't linked to a setter yet.
-function csrScope(user: CurrentUser): string | null | undefined {
+// undefined = no restriction (admins and non-CSR roles). Otherwise the setter dashboards a
+// CSR may see besides the team view: their own first, then any setters they manage. Empty
+// for a CSR whose user isn't linked to a setter yet.
+function csrScope(user: CurrentUser): string[] | undefined {
   if (user.isAdmin) return undefined;
-  if (user.role === 'csr' || user.csrKey) return user.csrKey ?? null;
-  return undefined;
+  if (user.role !== 'csr' && !user.csrKey) return undefined;
+  if (!user.csrKey) return [];
+  return [user.csrKey, ...(CSR_MANAGES[user.csrKey] ?? []).filter(k => k !== user.csrKey)];
 }
 
 async function MainContent({ params, clients, user }: { params: SearchParams; clients: ClientOption[]; user: CurrentUser }) {
@@ -204,12 +206,16 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
       // One evaluation of every lead feeds the team rows, the setter cards and the lead lists.
       const needsSpeed = csrPart !== 'bookings';
       const leads = needsSpeed ? await evaluateLeads(measured, range) : [];
-      const [rows, setters, board] = await Promise.all([
-        needsSpeed ? getClientSpeedRows(measured, range, leads) : Promise.resolve([]),
+      // The Team view leaves out the leads of setters excluded from the team rate, and their
+      // accounts unless a colleague answered leads there while covering.
+      const teamLeads = leads.filter(l => !TEAM_SPEED_EXCLUDES.includes(l.responsible));
+      const [allRows, setters, board] = await Promise.all([
+        needsSpeed ? getClientSpeedRows(measured, range, teamLeads) : Promise.resolve([]),
         needsSpeed ? getSetterScorecard(measured, range, leads) : Promise.resolve([]),
         csrPart !== 'stl' ? getBookingsBoard(clients, range.since, range.until) : Promise.resolve(null),
       ]);
       const byId = new Map(clients.map(c => [c.client_id, c]));
+      const rows = allRows.filter(r => !(r.csr && TEAM_SPEED_EXCLUDES.includes(r.csr) && r.leads + r.selfBooked === 0));
       callsOverview = rows.map(r => ({ client: byId.get(r.client_id)!, row: r })).filter(r => !!r.client);
       callsSetters = setters;
       csrBookings = board;
@@ -220,7 +226,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
         after(async () => { await syncSheetIfStale(age); });
       }
       // Only the breakdown lists individual leads; send just the ones it can show.
-      if (csrPart === 'stl') callsLeads = csrSel === 'team' ? leads : leads.filter(l => l.responsible === csrSel);
+      if (csrPart === 'stl') callsLeads = csrSel === 'team' ? teamLeads : leads.filter(l => l.responsible === csrSel);
     }
   }
 
@@ -319,7 +325,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
         )}
         {view === 'calls' && (
           <CsrDashboardView
-            visible={csrScope(user) === undefined ? null : ['team', ...(csrScope(user) ? [csrScope(user)!] : [])]}
+            visible={(() => { const scope = csrScope(user); return scope ? ['team', ...scope] : null; })()}
             csr={csrSel}
             part={csrPart}
             overview={callsOverview}

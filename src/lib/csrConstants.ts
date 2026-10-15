@@ -39,6 +39,18 @@ export const CSR_SETTERS: { key: string; label: string }[] = [
   { key: 'maddie', label: 'Maddie' },
 ];
 
+// Setters who also lead other setters, and whose dashboards they can open (Speed to Lead
+// and bookings) on top of their own and the team view. Keyed like CSR_SETTERS.
+export const CSR_MANAGES: Record<string, string[]> = {
+  cathy: ['alexis', 'maddie'],
+};
+
+// Setters left out of the TEAM Speed to Lead rate. Their own dashboard still shows their
+// figure; only the team's overall rate (CSR Team view and home card) leaves out the leads
+// they were responsible for. Cathy manages the other setters, so the team rate is theirs.
+export const TEAM_SPEED_EXCLUDES: string[] = ['cathy'];
+export const TEAM_SPEED_EXCLUDED_NAMES = TEAM_SPEED_EXCLUDES.map(k => k.charAt(0).toUpperCase() + k.slice(1)).join(' and ');
+
 // Setters whose Speed to Lead is NOT tracked (lowercased first name). Their assigned
 // clients drop out of the measure, their shifts don't appear on the Shifts tab, and leads
 // they'd be responsible for while covering aren't counted. Bookings KPIs are unaffected.
