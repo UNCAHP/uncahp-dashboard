@@ -207,7 +207,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
       const [rows, setters, board] = await Promise.all([
         needsSpeed ? getClientSpeedRows(measured, range, leads) : Promise.resolve([]),
         needsSpeed ? getSetterScorecard(measured, range, leads) : Promise.resolve([]),
-        csrPart !== 'stl' ? getBookingsBoard(clients, range.until) : Promise.resolve(null),
+        csrPart !== 'stl' ? getBookingsBoard(clients, range.since, range.until) : Promise.resolve(null),
       ]);
       const byId = new Map(clients.map(c => [c.client_id, c]));
       callsOverview = rows.map(r => ({ client: byId.get(r.client_id)!, row: r })).filter(r => !!r.client);
@@ -361,7 +361,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
 
 // Stand-in for the bookings board on screens that don't show bookings.
 const EMPTY_BOARD = (until: string): BookingsBoard => ({
-  available: true, month: `${until.slice(0, 7)}-01`, until, weekSince: until, daysInMonth: 30, dayOfMonth: 1, daysIntoWeek: 1, accounts: [], setters: {}, unmatched: [], syncAgeHours: null,
+  available: true, since: until, until, weekSince: until, daysIntoWeek: 1, accounts: [], setters: {}, unmatched: [], syncAgeHours: null,
 });
 
 // Placeholder portfolio targets (monthly). Per-client targets + ad budgets will

@@ -13,10 +13,12 @@ import { getAssignmentHistory, ownerOn } from './csrAssignments';
 //     accounts they booked for as cover are listed too, without a target. So a setter's
 //     total always equals their tab's total.
 //
-// The period is the calendar month and the Monday-started week that contain the selected
-// end date, each counted up to that date. Targets are monthly (clients.monthly_booking_target);
-// the weekly one is pro rata by day: monthly × 7 ÷ days in the month. "On track" compares
-// bookings so far with the target pro rata to the end date.
+// The period is the date range picked in the top bar, plus the Monday-started week that
+// contains its end date. Targets are monthly (clients.monthly_booking_target) and are
+// spread evenly over each month's days: a range's target is the sum of its days' shares
+// (so "This Month" gets the target to date, and a range across two months gets a share of
+// each). The weekly target is monthly × 7 ÷ days in the end date's month. "On track"
+// compares bookings with the target pro rata up to today.
 
 export type BookingCount = { total: number; manual: number; lp: number; split: number };
 //   split = bookings whose MAN / LP split is known (tabs from October 2026 on); older
@@ -28,20 +30,19 @@ export type AccountBookings = {
   csr: string | null;
   target: number | null;          // monthly
   weekTarget: number | null;      // pro rata by day
-  month: BookingCount;            // 1st of the month → end date
+  range: BookingCount;            // selected start → end date
   week: BookingCount;             // Monday → end date
-  monthPace: number | null;       // target pro rata to the end date
+  rangeTarget: number | null;     // the monthly target's share of the selected days
+  rangePace: number | null;       // ...of the selected days up to today (= rangeTarget for past ranges)
   weekPace: number | null;        // weekly target pro rata to the end date
   cover?: boolean;                // setter view: an account they booked for that isn't theirs
 };
 
 export type BookingsBoard = {
   available: boolean;             // false until migration 0020 has run
-  month: string;                  // yyyy-mm-01
-  until: string;                  // the end date counted up to
-  weekSince: string;              // that week's Monday
-  daysInMonth: number;
-  dayOfMonth: number;
+  since: string;                  // selected start date
+  until: string;                  // selected end date
+  weekSince: string;              // the Monday of the end date's week
   daysIntoWeek: number;           // 1 (Monday) … 7
   accounts: AccountBookings[];    // every active B2C client, all tabs combined (Team view)
   setters: Record<string, AccountBookings[]>; // per setter: their own tab only (see header)
@@ -62,19 +63,37 @@ export const accountKey = (name: string): string =>
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
-export async function getBookingsBoard(clients: ClientOption[], until: string): Promise<BookingsBoard> {
+const daysInMonthOf = (day: string) => {
+  const [y, m] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+};
+// Share of a monthly target that falls on the days from `a` to `b` inclusive.
+function targetShare(a: string, b: string): number {
+  let share = 0;
+  for (let t = Date.parse(`${a}T12:00:00Z`), end = Date.parse(`${b}T12:00:00Z`); t <= end; t += 86_400_000) {
+    share += 1 / daysInMonthOf(iso(new Date(t)));
+  }
+  return share;
+}
+const londonToday = () => {
+  const p = new Date().toLocaleDateString('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).split('/');
+  return `${p[2]}-${p[1]}-${p[0]}`;
+};
+
+export async function getBookingsBoard(clients: ClientOption[], since: string, until: string): Promise<BookingsBoard> {
   const end = new Date(`${until}T12:00:00Z`);
-  const y = end.getUTCFullYear(), m = end.getUTCMonth();
-  const month = `${until.slice(0, 7)}-01`;
-  const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  const dayOfMonth = end.getUTCDate();
+  const daysInMonth = daysInMonthOf(until);
   const daysIntoWeek = ((end.getUTCDay() + 6) % 7) + 1;
   const weekSince = iso(new Date(end.getTime() - (daysIntoWeek - 1) * 86_400_000));
-  const from = weekSince < month ? weekSince : month;
+  const from = weekSince < since ? weekSince : since;
+  const today = londonToday();
+  // Each target × these shares = the target for the range, and for the part of it up to today.
+  const rangeShare = targetShare(since, until);
+  const paceShare = since > today ? 0 : targetShare(since, until < today ? until : today);
 
   const b2c = clients.filter(c => c.segment !== 'b2b');
   const board: BookingsBoard = {
-    available: true, month, until, weekSince, daysInMonth, dayOfMonth, daysIntoWeek,
+    available: true, since, until, weekSince, daysIntoWeek,
     accounts: [], setters: {}, unmatched: [], syncAgeHours: null,
   };
 
@@ -114,11 +133,11 @@ export async function getBookingsBoard(clients: ClientOption[], until: string): 
     const id = byKey.get(accountKey(r.account));
     const date = String(r.booking_date);
     if (!id) {
-      if (date >= month) unmatched.set(r.account, (unmatched.get(r.account) ?? 0) + r.total_bookings);
+      if (date >= since) unmatched.set(r.account, (unmatched.get(r.account) ?? 0) + r.total_bookings);
       continue;
     }
     const sk = `${r.setter_key}|${id}`;
-    if (date >= month) { add(month_, id, r); add(sMonth, sk, r); }
+    if (date >= since) { add(month_, id, r); add(sMonth, sk, r); }
     if (date >= weekSince) { add(week_, id, r); add(sWeek, sk, r); }
   }
 
@@ -132,9 +151,10 @@ export async function getBookingsBoard(clients: ClientOption[], until: string): 
       csr: (() => { const o = ownerOn(history, c.client_id, until); return o === undefined ? c.csr_key ?? null : o; })(),
       target,
       weekTarget,
-      month: month_.get(c.client_id) ?? empty(),
+      range: month_.get(c.client_id) ?? empty(),
       week: week_.get(c.client_id) ?? empty(),
-      monthPace: target == null ? null : round1((target * dayOfMonth) / daysInMonth),
+      rangeTarget: target == null ? null : round1(target * rangeShare),
+      rangePace: target == null ? null : round1(target * paceShare),
       weekPace: weekTarget == null ? null : round1((weekTarget * daysIntoWeek) / 7),
     };
   });
@@ -148,15 +168,15 @@ export async function getBookingsBoard(clients: ClientOption[], until: string): 
   for (const key of setterKeys) {
     const own = board.accounts.filter(a => a.csr === key).map(a => ({
       ...a,
-      month: sMonth.get(`${key}|${a.client_id}`) ?? empty(),
+      range: sMonth.get(`${key}|${a.client_id}`) ?? empty(),
       week: sWeek.get(`${key}|${a.client_id}`) ?? empty(),
     }));
     const ownIds = new Set(own.map(a => a.client_id));
     const coverIds = new Set([...sMonth.keys(), ...sWeek.keys()].filter(k => k.startsWith(`${key}|`)).map(k => k.split('|')[1]).filter(id => !ownIds.has(id)));
     const cover = board.accounts.filter(a => coverIds.has(a.client_id)).map(a => ({
       ...a,
-      target: null, weekTarget: null, monthPace: null, weekPace: null, cover: true,
-      month: sMonth.get(`${key}|${a.client_id}`) ?? empty(),
+      target: null, weekTarget: null, rangeTarget: null, rangePace: null, weekPace: null, cover: true,
+      range: sMonth.get(`${key}|${a.client_id}`) ?? empty(),
       week: sWeek.get(`${key}|${a.client_id}`) ?? empty(),
     }));
     board.setters[key] = [...own, ...cover];

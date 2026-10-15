@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { NavLink } from '@/components/NavProgress';
 import {
-  Loader2, RefreshCw, ArrowLeft, ChevronRight, ChevronDown, Users, PhoneOutgoing, Moon, CalendarCheck, Zap, ExternalLink,
+  Loader2, RefreshCw, ArrowLeft, ChevronRight, ChevronDown, ChevronUp, Users, PhoneOutgoing, Moon, CalendarCheck, Zap, ExternalLink,
 } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
 import type { ClientSpeed, ClientSpeedRow, SetterCard, ShiftRow, LeadEval } from '@/lib/csrMetrics';
@@ -79,13 +79,13 @@ function speedFor(key: CsrKey, overview: CallOverviewRow[], setters: SetterCard[
 // target set — an account without one can't be on or off track.
 
 type BookingTotals = {
-  month: BookingCount;
+  range: BookingCount;
   week: BookingCount;
-  target: number;        // sum of monthly targets set
+  target: number;        // targets for the selected dates, summed over accounts that have one
   weekTarget: number;
-  monthPace: number;     // target pro rata to the end date
+  rangePace: number;     // that target pro rata up to today
   weekPace: number;
-  bookedTargeted: number;     // month bookings on accounts with a target
+  bookedTargeted: number;     // bookings in range on accounts with a target
   weekBookedTargeted: number;
   withTarget: number;
   accounts: number;
@@ -94,17 +94,17 @@ type BookingTotals = {
 function bookingsFor(accounts: AccountBookings[]): BookingTotals {
   const add = (a: BookingCount, b: BookingCount): BookingCount => ({ total: a.total + b.total, manual: a.manual + b.manual, lp: a.lp + b.lp, split: a.split + b.split });
   const zero: BookingCount = { total: 0, manual: 0, lp: 0, split: 0 };
-  const t: BookingTotals = { month: zero, week: zero, target: 0, weekTarget: 0, monthPace: 0, weekPace: 0, bookedTargeted: 0, weekBookedTargeted: 0, withTarget: 0, accounts: accounts.length };
+  const t: BookingTotals = { range: zero, week: zero, target: 0, weekTarget: 0, rangePace: 0, weekPace: 0, bookedTargeted: 0, weekBookedTargeted: 0, withTarget: 0, accounts: accounts.filter(a => !a.cover).length };
   for (const a of accounts) {
-    t.month = add(t.month, a.month);
+    t.range = add(t.range, a.range);
     t.week = add(t.week, a.week);
-    if (a.target == null) continue;
+    if (a.rangeTarget == null) continue;
     t.withTarget++;
-    t.target += a.target;
+    t.target += a.rangeTarget;
     t.weekTarget += a.weekTarget ?? 0;
-    t.monthPace += a.monthPace ?? 0;
+    t.rangePace += a.rangePace ?? 0;
     t.weekPace += a.weekPace ?? 0;
-    t.bookedTargeted += a.month.total;
+    t.bookedTargeted += a.range.total;
     t.weekBookedTargeted += a.week.total;
   }
   return t;
@@ -155,6 +155,17 @@ function SplitBar({ c, className }: { c: BookingCount; className?: string }) {
   );
 }
 
+// "October" for a whole month, "October to date" for this month so far, otherwise the dates.
+function periodLabel(since: string, until: string): string {
+  const [y, m] = since.split('-').map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  if (since.endsWith('-01') && until.slice(0, 7) === since.slice(0, 7)) {
+    const name = MONTHS_LONG[m - 1];
+    return Number(until.slice(8)) === last ? name : `${name} 1–${Number(until.slice(8))}`;
+  }
+  return since === until ? fmtShort(since) : `${fmtShort(since)} – ${fmtShort(until)}`;
+}
+
 function syncNote(board: BookingsBoard): string {
   const h = board.syncAgeHours;
   if (h == null) return 'Tracker sheet not synced yet';
@@ -187,7 +198,7 @@ export function CsrDashboardView({
     return `/?${p.toString()}`;
   };
 
-  const monthName = `${MONTHS_LONG[Number(bookings.month.slice(5, 7)) - 1]} ${bookings.month.slice(0, 4)}`;
+  const monthName = periodLabel(bookings.since, bookings.until);
   const crumbs: { label: string; href: string }[] = [];
   if (csr) crumbs.push({ label: 'CSR Dashboard', href: href({}) });
   if (csr && (part || detail)) crumbs.push({ label: personLabel(csr), href: href({ csr }) });
@@ -256,14 +267,14 @@ function Home({ visible, overview, setters, bookings, monthName, href }: {
 
             <div className="mt-6 border-t border-border pt-4">
               <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
-                <span className="inline-flex items-center gap-1.5"><CalendarCheck size={12} className="text-pink" /> Bookings · {monthName.split(' ')[0]}</span>
-                <TrackChip t={trackOf(b.bookedTargeted, b.monthPace, hasTarget)} />
+                <span className="inline-flex items-center gap-1.5"><CalendarCheck size={12} className="text-pink" /> Bookings · {monthName}</span>
+                <TrackChip t={trackOf(b.bookedTargeted, b.rangePace, hasTarget)} />
               </div>
               <div className="mt-2 flex items-baseline gap-1.5">
-                <span className="font-mono text-3xl font-bold tabular-nums text-fg">{b.month.total}</span>
-                {hasTarget && <span className="font-mono text-sm tabular-nums text-fg-muted">/ {b.target}</span>}
+                <span className="font-mono text-3xl font-bold tabular-nums text-fg">{b.range.total}</span>
+                {hasTarget && <span className="font-mono text-sm tabular-nums text-fg-muted">/ {Math.round(b.target)}</span>}
               </div>
-              {hasTarget && <TargetBar booked={b.bookedTargeted} target={b.target} pace={b.monthPace} className="mt-3" />}
+              {hasTarget && <TargetBar booked={b.bookedTargeted} target={b.target} pace={b.rangePace} className="mt-3" />}
               <p className="mt-2 text-xs text-fg-muted">
                 This week <span className="font-mono font-semibold tabular-nums text-fg">{b.week.total}</span>{hasTarget && <> of {num1(b.weekTarget)}</>}
               </p>
@@ -297,7 +308,7 @@ function Person({ csr, overview, setters, bookings, monthName, href }: {
   const b = bookingsFor(accounts);
   const s = speedFor(csr, overview, setters);
   const hasTarget = b.withTarget > 0;
-  const monthTrack = trackOf(b.bookedTargeted, b.monthPace, hasTarget);
+  const monthTrack = trackOf(b.bookedTargeted, b.rangePace, hasTarget);
   const weekTrack = trackOf(b.weekBookedTargeted, b.weekPace, hasTarget);
   const late = Math.max(0, s.leads - s.attempted - s.never);
 
@@ -307,13 +318,13 @@ function Person({ csr, overview, setters, bookings, monthName, href }: {
         <PanelHead icon={CalendarCheck} title="Bookings" sub={`${monthName} · ${plural(accounts.filter(a => !a.cover).length, 'account')}`} />
         <div className="mt-6 grid gap-6 sm:grid-cols-2">
           <div>
-            <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-fg-muted">This month <TrackChip t={monthTrack} /></div>
+            <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-fg-muted">Selected dates <TrackChip t={monthTrack} /></div>
             <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="font-mono text-5xl font-bold tabular-nums leading-none text-fg">{b.month.total}</span>
-              {hasTarget && <span className="font-mono text-lg tabular-nums text-fg-muted">/ {b.target}</span>}
+              <span className="font-mono text-5xl font-bold tabular-nums leading-none text-fg">{b.range.total}</span>
+              {hasTarget && <span className="font-mono text-lg tabular-nums text-fg-muted">/ {Math.round(b.target)}</span>}
             </div>
-            {hasTarget && <TargetBar booked={b.bookedTargeted} target={b.target} pace={b.monthPace} className="mt-4" />}
-            {hasTarget && <p className="mt-2 text-xs text-fg-muted">{signed(b.bookedTargeted - b.target)} vs target · pace {num1(b.monthPace)} by {fmtShort(bookings.until)}</p>}
+            {hasTarget && <TargetBar booked={b.bookedTargeted} target={b.target} pace={b.rangePace} className="mt-4" />}
+            {hasTarget && <p className="mt-2 text-xs text-fg-muted">{signed(b.bookedTargeted - Math.round(b.target))} vs the target for these dates</p>}
           </div>
           <div>
             <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-fg-muted">This week <TrackChip t={weekTrack} /></div>
@@ -326,8 +337,8 @@ function Person({ csr, overview, setters, bookings, monthName, href }: {
           </div>
         </div>
         <div className="mt-6 border-t border-border pt-4">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">LP / manual this month</div>
-          <SplitBar c={b.month} />
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">LP / manual · selected dates</div>
+          <SplitBar c={b.range} />
         </div>
         <BookingsFootnote board={bookings} b={b} />
       </NavLink>
@@ -378,14 +389,12 @@ function BookingsAccounts({ csr, bookings, clients, monthName }: { csr: CsrKey; 
   const byId = useMemo(() => new Map(clients.map(c => [c.client_id, c])), [clients]);
   const accounts = accountsFor(bookings, csr);
   const b = bookingsFor(accounts);
-  // Furthest behind first; accounts with no target, then no bookings, at the bottom.
-  const rows = [...accounts].sort((x, y) => {
-    const nx = x.target == null, ny = y.target == null;
-    if (nx !== ny) return Number(nx) - Number(ny);
-    if (nx && ny) return y.month.total - x.month.total || x.client_name.localeCompare(y.client_name);
-    return (x.month.total - (x.monthPace ?? 0)) - (y.month.total - (y.monthPace ?? 0)) || x.client_name.localeCompare(y.client_name);
-  });
-  const behind = rows.filter(a => trackOf(a.month.total, a.monthPace, a.target != null) === 'off').length;
+  // Default: furthest behind target first. Any column header re-sorts; accounts without a
+  // target always sit below those with one when sorting by target, +/- or status.
+  const [sort, setSort] = useState<{ key: BookSort; asc: boolean }>({ key: 'status', asc: true });
+  const rows = sortBookings(accounts, sort);
+  const toggle = (key: BookSort) => setSort(s => (s.key === key ? { key, asc: !s.asc } : { key, asc: key === 'name' || key === 'setter' || key === 'status' }));
+  const behind = rows.filter(a => trackOf(a.range.total, a.rangePace, a.rangeTarget != null) === 'off').length;
 
   return (
     <>
@@ -393,10 +402,10 @@ function BookingsAccounts({ csr, bookings, clients, monthName }: { csr: CsrKey; 
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">{monthName}</div>
           <div className="mt-1 flex items-baseline gap-1.5">
-            <span className="font-mono text-4xl font-bold tabular-nums text-fg">{b.month.total}</span>
-            {b.withTarget > 0 && <span className="font-mono text-base tabular-nums text-fg-muted">/ {b.target}</span>}
+            <span className="font-mono text-4xl font-bold tabular-nums text-fg">{b.range.total}</span>
+            {b.withTarget > 0 && <span className="font-mono text-base tabular-nums text-fg-muted">/ {Math.round(b.target)}</span>}
           </div>
-          {b.withTarget > 0 && <p className="mt-1 text-xs text-fg-muted">{signed(b.bookedTargeted - b.target)} vs target · {behind === 0 ? <span className="text-green">all on track</span> : <><span className="font-semibold text-red">{behind}</span> off track</>}</p>}
+          {b.withTarget > 0 && <p className="mt-1 text-xs text-fg-muted">{signed(b.bookedTargeted - Math.round(b.target))} vs target · {behind === 0 ? <span className="text-green">all on track</span> : <><span className="font-semibold text-red">{behind}</span> off track</>}</p>}
         </div>
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">This week · {fmtShort(bookings.weekSince)} – {fmtShort(bookings.until)}</div>
@@ -407,7 +416,7 @@ function BookingsAccounts({ csr, bookings, clients, monthName }: { csr: CsrKey; 
         </div>
         <div>
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">LP / manual</div>
-          <SplitBar c={b.month} />
+          <SplitBar c={b.range} />
         </div>
       </section>
 
@@ -415,30 +424,33 @@ function BookingsAccounts({ csr, bookings, clients, monthName }: { csr: CsrKey; 
         <table className="w-full min-w-[760px] text-sm">
           <thead>
             <tr className="border-b border-border text-[11px] uppercase tracking-wider text-fg-muted">
-              <th className="px-5 py-3 text-left font-semibold">Account</th>
-              {csr === 'team' && <th className="px-3 py-3 text-left font-semibold">Setter</th>}
-              <th className="px-3 py-3 text-right font-semibold">Target</th>
-              <th className="px-3 py-3 text-right font-semibold">Booked</th>
-              <th className="w-[18%] px-3 py-3 text-left font-semibold"><span className="inline-flex items-center gap-1">LP / MAN <InfoTip text="LP = booked on the landing page. MAN = booked by a setter. From the Appointment Setting Tracker; months before October 2026 logged SMS / CALL instead, so they have no split." /></span></th>
-              <th className="px-3 py-3 text-right font-semibold">This week</th>
-              <th className="px-3 py-3 text-right font-semibold"><span className="inline-flex items-center gap-1">+/- <InfoTip text="Bookings this month minus the monthly target." /></span></th>
-              <th className="px-5 py-3 text-right font-semibold"><span className="inline-flex items-center gap-1">Status <InfoTip text="On track = bookings so far are at or above the target pro rata to the end date." /></span></th>
+              <SortHead label="Account" k="name" sort={sort} onSort={toggle} className="px-5 text-left" />
+              {csr === 'team' && <SortHead label="Setter" k="setter" sort={sort} onSort={toggle} className="px-3 text-left" />}
+              <SortHead label="Target" k="target" sort={sort} onSort={toggle} className="px-3 text-right" info="The monthly target's share of the selected dates. Hover a figure for the monthly target." />
+              <SortHead label="Booked" k="booked" sort={sort} onSort={toggle} className="px-3 text-right" />
+              <SortHead label="LP / MAN" k="lp" sort={sort} onSort={toggle} className="w-[18%] px-3 text-left" info="LP = booked on the landing page. MAN = booked by a setter. Sorts by LP share. From the Appointment Setting Tracker; months before October 2026 logged SMS / CALL instead, so they have no split." />
+              <SortHead label="This week" k="week" sort={sort} onSort={toggle} className="px-3 text-right" />
+              <SortHead label="+/-" k="diff" sort={sort} onSort={toggle} className="px-3 text-right" info="Bookings in the selected dates minus the target for those dates." />
+              <SortHead label="Status" k="status" sort={sort} onSort={toggle} className="px-5 text-right" info="On track = bookings are at or above the target pro rata up to today. Sorted furthest behind first." />
             </tr>
           </thead>
           <tbody>
             {rows.map(a => {
               const c = byId.get(a.client_id);
-              const track = trackOf(a.month.total, a.monthPace, a.target != null);
+              const track = trackOf(a.range.total, a.rangePace, a.rangeTarget != null);
+              const goal = a.rangeTarget == null ? null : Math.round(a.rangeTarget);
               return (
-                <tr key={a.client_id} className={cn('border-b border-border/60 last:border-0', a.month.total === 0 && a.target == null && 'text-fg-dim')}>
+                <tr key={a.client_id} className={cn('border-b border-border/60 last:border-0', a.range.total === 0 && a.rangeTarget == null && 'text-fg-dim')}>
                   <td className="px-5 py-3"><span className="inline-flex items-center gap-3">{c && <Badge c={c} />}<span className="font-medium text-fg">{a.client_name}</span>{a.cover && <span className="rounded bg-border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-fg-muted">cover</span>}</span></td>
                   {csr === 'team' && <td className="px-3 py-3 text-fg-muted">{setterLabel(a.csr)}</td>}
-                  <td className="px-3 py-3 text-right font-mono tabular-nums text-fg-muted">{a.target ?? '—'}</td>
-                  <td className="px-3 py-3 text-right font-mono text-base font-semibold tabular-nums text-fg">{a.month.total}</td>
-                  <td className="px-3 py-3"><SplitBar c={a.month} /></td>
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-fg-muted">
+                    {goal == null ? '—' : <Tooltip always label={`${a.target} a month`} className="inline-block">{goal}</Tooltip>}
+                  </td>
+                  <td className="px-3 py-3 text-right font-mono text-base font-semibold tabular-nums text-fg">{a.range.total}</td>
+                  <td className="px-3 py-3"><SplitBar c={a.range} /></td>
                   <td className="px-3 py-3 text-right font-mono tabular-nums">{a.week.total}{a.weekTarget != null && <span className="text-fg-dim"> / {num1(a.weekTarget)}</span>}</td>
-                  <td className={cn('px-3 py-3 text-right font-mono text-base font-semibold tabular-nums', a.target == null ? 'text-fg-dim' : a.month.total >= a.target ? 'text-green' : track === 'on' ? 'text-fg' : 'text-red')}>
-                    {a.target == null ? '—' : signed(a.month.total - a.target)}
+                  <td className={cn('px-3 py-3 text-right font-mono text-base font-semibold tabular-nums', goal == null ? 'text-fg-dim' : a.range.total >= goal ? 'text-green' : track === 'on' ? 'text-fg' : 'text-red')}>
+                    {goal == null ? '—' : signed(a.range.total - goal)}
                   </td>
                   <td className="px-5 py-3 text-right"><TrackChip t={track} /></td>
                 </tr>
@@ -462,6 +474,51 @@ function BookingsAccounts({ csr, bookings, clients, monthName }: { csr: CsrKey; 
       <SheetSyncButton />
       </div>
     </>
+  );
+}
+
+// ─── Sorting the bookings table ──────────────────────────────────────────────
+
+type BookSort = 'name' | 'setter' | 'target' | 'booked' | 'lp' | 'week' | 'diff' | 'status';
+
+function sortBookings(list: AccountBookings[], sort: { key: BookSort; asc: boolean }): AccountBookings[] {
+  const dir = sort.asc ? 1 : -1;
+  const name = (a: AccountBookings, b: AccountBookings) => a.client_name.localeCompare(b.client_name);
+  const lpShare = (a: AccountBookings) => (a.range.split ? a.range.lp / a.range.split : -1);
+  const diff = (a: AccountBookings) => a.range.total - Math.round(a.rangeTarget ?? 0);
+  const behind = (a: AccountBookings) => a.range.total - (a.rangePace ?? 0);
+  const needsTarget = sort.key === 'target' || sort.key === 'diff' || sort.key === 'status';
+  return [...list].sort((a, b) => {
+    if (needsTarget) {
+      const na = a.rangeTarget == null, nb = b.rangeTarget == null;
+      if (na !== nb) return Number(na) - Number(nb);
+      if (na && nb) return b.range.total - a.range.total || name(a, b);
+    }
+    const d =
+      sort.key === 'name' ? name(a, b)
+      : sort.key === 'setter' ? setterLabel(a.csr).localeCompare(setterLabel(b.csr))
+      : sort.key === 'target' ? (a.rangeTarget ?? 0) - (b.rangeTarget ?? 0)
+      : sort.key === 'booked' ? a.range.total - b.range.total
+      : sort.key === 'lp' ? lpShare(a) - lpShare(b)
+      : sort.key === 'week' ? a.week.total - b.week.total
+      : sort.key === 'diff' ? diff(a) - diff(b)
+      : behind(a) - behind(b);
+    return dir * d || name(a, b);
+  });
+}
+
+function SortHead({ label, k, sort, onSort, className, info }: { label: string; k: BookSort; sort: { key: BookSort; asc: boolean }; onSort: (k: BookSort) => void; className?: string; info?: string }) {
+  const active = sort.key === k;
+  const Arrow = sort.asc ? ChevronUp : ChevronDown;
+  return (
+    <th aria-sort={active ? (sort.asc ? 'ascending' : 'descending') : 'none'} className={cn('py-3 font-semibold', className)}>
+      <span className="inline-flex items-center gap-1">
+        <button onClick={() => onSort(k)} className={cn('inline-flex items-center gap-1 uppercase tracking-wider transition-colors hover:text-fg', active && 'text-fg')}>
+          {label} <Arrow size={12} className={cn(!active && 'opacity-0')} />
+        </button>
+        {info && <InfoTip text={info} />}
+      </span>
+    </th>
   );
 }
 
