@@ -27,9 +27,12 @@ import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 //   CONNECTED   — a completed outbound call of ≥60s within 30 min (the same bar as a
 //                 "conversation"). Shown alongside as the outcome; not scored.
 //
-// Credit for an attempt goes to whoever dialled first. Accountability for a lead (the
-// per-shift view) goes to the RESPONSIBLE setter: the assigned one if on shift, otherwise
-// the cover who dialled, otherwise the first cover on shift.
+// Only calls made on the day the lead arrived count; a call on a later day leaves the lead
+// "never phoned" for that day. Credit for an attempt goes to whoever dialled first.
+// Accountability for a lead (the per-shift view) goes to the RESPONSIBLE setter: the
+// assigned one if she worked that day at all — even if the lead arrived after her shift
+// ended — otherwise (she was off that day) the cover who dialled it that day, otherwise
+// the first cover on shift.
 
 const CONVERSATION_MIN_SEC = 60;
 
@@ -190,13 +193,13 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
     if (on.length === 0) continue; // weekend, before 10:30, or nobody on shift → not measured
 
     const fc = firstCall.get(l.source_id);
-    const dial = fc && fc.at > l.date_added ? fc : null;
+    const dial = fc && fc.at > l.date_added && londonDate(fc.at) === day ? fc : null;
     const dialBy = dial ? firstName(dial.by) : null;
 
     const dated = ownerOn(history, l.location_id, day);
     const own = dated === undefined ? assigned.get(l.location_id) ?? null : dated;
     let responsible: string;
-    if (own && on.some(s => s.csr === own)) responsible = own;
+    if (own && (byDay.get(day) ?? []).some(s => s.csr === own)) responsible = own;
     else if (dialBy && on.some(s => s.csr === dialBy)) responsible = dialBy;
     else responsible = on[0].csr;
 
