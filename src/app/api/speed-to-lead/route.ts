@@ -17,7 +17,7 @@ import { setterClients, isTrackedSetter, UNTRACKED_SETTERS, SPEED_TO_LEAD_MINUTE
 // endpoint returns the measured data for the range it's given.
 //
 // Definition, in short: a NEW LEAD is a contact with a campaign REF tag and a phone number
-// that arrived while its client's assigned setter (or cover) was on shift, on a weekday
+// that arrived on a day its client's assigned setter was working, on a weekday
 // from 10:30 to shift end (csrConstants.SPEED_DAY_START). ATTEMPTED =
 // an outbound dial within 30 min, answered or not (the scored rate). CONNECTED = a
 // completed 60s+ call within 30 min. A lead paid-up within 30 min before any dial
@@ -80,8 +80,8 @@ export async function GET(req: Request) {
   const all = setterClients(await getActiveClients());
   let measured = all.map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null, name: c.client_name }));
   if (clientFilter) measured = measured.filter(c => c.client_id === clientFilter);
-  // `csr` is applied per LEAD (responsible setter), not per client — so cover leads on a
-  // colleague's client count for the setter who was on, matching the KPIs page.
+  // `csr` is applied per LEAD (responsible setter) — always the account's assigned setter
+  // that day, so it matches the KPIs page.
   const range = { since: from, until: to, label: '' };
 
   const [leads, shifts] = await Promise.all([evaluateLeads(measured, range), getShifts(range)]);
@@ -93,7 +93,7 @@ export async function GET(req: Request) {
   const detail: LeadEval[] = [];
   const ownerOf = new Map<string, string>(); // `${setter}|${client}` → that account's owner
   for (const l of leads) {
-    // When filtering by setter, keep only leads they were responsible for (own + cover).
+    // When filtering by setter, keep only leads they were responsible for (their own accounts).
     if (csrFilter && l.responsible !== csrFilter) continue;
     if (wantLeads && (!onlyMissed || (!l.selfBooked && !l.attempted))) detail.push(l);
     add(team, l);
@@ -159,6 +159,6 @@ export async function GET(req: Request) {
     team: out(team),
     setters,
     ...(wantLeads ? { leads: leadRows, leads_filter: onlyMissed ? 'missed' : 'all' } : {}),
-    definition: `A new lead is a contact with a campaign REF tag and a phone number that arrived while its client's assigned setter (or cover) was on shift. ${SPEED_WINDOW_TEXT} Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored rate. Connected = a completed 60s+ call within ${SPEED_TO_LEAD_MINUTES} min. A lead that paid a deposit within ${SPEED_TO_LEAD_MINUTES} min before any dial self-booked and is excluded. Target ${SPEED_TARGET_PCT}%.`,
+    definition: `A new lead is a contact with a campaign REF tag and a phone number that arrived on a day its client's assigned setter was working (covers aren't tracked). ${SPEED_WINDOW_TEXT} Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored rate. Connected = a completed 60s+ call within ${SPEED_TO_LEAD_MINUTES} min. A lead that paid a deposit within ${SPEED_TO_LEAD_MINUTES} min before any dial self-booked and is excluded. Target ${SPEED_TARGET_PCT}%.`,
   });
 }

@@ -57,7 +57,7 @@ const TierChip = ({ v }: { v: number | null }) =>
   v == null ? null
     : <span className={cn('inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold', onTarget(v) ? 'bg-green/15 text-green' : 'bg-red/15 text-red')}>{onTarget(v) ? 'On target' : 'Below target'}</span>;
 
-const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number, arriving while the client's setter (or cover) was on shift per the daily Start of Day check-in. ${SPEED_WINDOW_TEXT} Test submissions are left out, and so are leads that paid a deposit within 30 min before anyone called them. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored KPI. Connected = a completed call of 60s+ in that window. A lead nobody phoned counts as a miss. ${SPEED_TARGET_TEXT}`;
+const DEFINITION = `A new lead = a contact with a campaign REF tag (e.g. dlc-ec-01-aug26) and a phone number, on an account assigned to a setter who was working that day per the daily Start of Day check-in. Covers aren't tracked: leads on a colleague's accounts don't count for anyone. ${SPEED_WINDOW_TEXT} Test submissions are left out, and so are leads that paid a deposit within 30 min before anyone called them. Attempted = an outbound dial within ${SPEED_TO_LEAD_MINUTES} min, answered or not — the scored KPI. Connected = a completed call of 60s+ in that window. A lead nobody phoned counts as a miss. ${SPEED_TARGET_TEXT}`;
 
 // ─── Speed to Lead, rolled up for whoever's dashboard is open ────────────────
 
@@ -347,7 +347,7 @@ function Person({ csr, setters, bookings, monthName, href }: {
       </NavLink>
 
       <NavLink href={href({ csr, part: 'stl' })} className="group flex flex-col rounded-2xl border border-border bg-surface p-6 transition-colors hover:border-pink/50">
-        <PanelHead icon={Zap} title="Speed to Lead" sub={`${csr === 'team' ? 'All accounts' : 'Their accounts, plus cover'} · target ${SPEED_TARGET_PCT}%`} info={DEFINITION} />
+        <PanelHead icon={Zap} title="Speed to Lead" sub={`${csr === 'team' ? 'All accounts' : 'Their accounts'} · target ${SPEED_TARGET_PCT}%`} info={DEFINITION} />
         <div className="mt-6 flex items-baseline gap-3">
           <span className={cn('font-mono text-5xl font-bold tabular-nums leading-none', speedText(s.pct))}>{pct(s.pct)}</span>
           <TierChip v={s.pct} />
@@ -890,7 +890,7 @@ function LeadLog({ leads }: { leads: LeadEval[] }) {
             <tr className="border-b border-border text-[10px] uppercase tracking-wider text-fg-muted">
               <th className="px-2 py-2 text-left font-semibold">Arrived</th>
               <th className="px-2 py-2 text-left font-semibold">Lead</th>
-              <th className="px-2 py-2 text-left font-semibold"><span className="inline-flex items-center gap-1">Responsible <InfoTip text="The assigned setter if they were on shift when it arrived; otherwise whoever was covering." /></span></th>
+              <th className="px-2 py-2 text-left font-semibold"><span className="inline-flex items-center gap-1">Responsible <InfoTip text="The setter the account is assigned to." /></span></th>
               <th className="px-2 py-2 text-right font-semibold">First dial</th>
               <th className="px-2 py-2 text-left font-semibold">By</th>
               <th className="px-2 py-2 text-right font-semibold">Outcome</th>

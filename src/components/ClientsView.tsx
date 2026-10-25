@@ -366,7 +366,7 @@ function ClientFormModal({
             />
           </Field>
 
-          <Field label="Assigned setter" hint="Whose shift this client's leads are measured against for Speed to Lead. When they're off, cover from whoever else is on shift counts. A change applies from the 1st of this month; earlier months stay with the previous setter.">
+          <Field label="Assigned setter" hint="Whose Speed to Lead this client's leads count towards, on days they work. Leads on days they're off aren't measured. A change applies from the 1st of this month; earlier months stay with the previous setter.">
             <select name="csr_key" defaultValue={initial?.csr_key ?? ''} className={inputCls}>
               <option value="">Self booking — no dedicated setter</option>
               {CSR_SETTERS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}

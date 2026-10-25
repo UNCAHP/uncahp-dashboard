@@ -15,9 +15,9 @@ import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 //                 on shift (csr_shifts, written daily by Viktor after the Start of Day
 //                 check-in; London time):
 //                 the client's assigned setter ON THAT DAY (client_csr_assignments, falling
-//                 back to clients.csr_key), or — when they're off —
-//                 whoever else was on shift (cover). A day with no shift rows, or a lead
-//                 arriving when nobody's on, isn't measured at all.
+//                 back to clients.csr_key) must have worked that day. Covers aren't
+//                 tracked: a lead on the account of a setter who was off that day, on an
+//                 account with no setter, or arriving when nobody's on, isn't measured.
 //   SELF-BOOKED — a lead that paid a deposit within the 30-minute window, before anyone
 //                 dialled, sorted itself out and is left out of the measure. A lead that
 //                 paid later without a call is still a missed response; one that paid
@@ -29,10 +29,8 @@ import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 //
 // Only calls made on the day the lead arrived count; a call on a later day leaves the lead
 // "never phoned" for that day. Credit for an attempt goes to whoever dialled first.
-// Accountability for a lead (the per-shift view) goes to the RESPONSIBLE setter: the
-// assigned one if she worked that day at all — even if the lead arrived after her shift
-// ended — otherwise (she was off that day) the cover who dialled it that day, otherwise
-// the first cover on shift.
+// Accountability for a lead always goes to the account's assigned setter for that day —
+// even if it arrived after her shift ended. Nobody is measured on a colleague's accounts.
 
 const CONVERSATION_MIN_SEC = 60;
 
@@ -51,8 +49,6 @@ export const isWeekend = (day: string): boolean => {
 };
 // Days Speed to Lead isn't measured on at all.
 export const offTrackDay = (day: string): boolean => SPEED_WEEKDAYS_ONLY && isWeekend(day);
-
-const firstName = (s: string): string => s.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
 
 // Supabase caps a select at 1000 rows; page through anything that can exceed it. Every
 // paged query must end its ORDER BY on a unique column (.order('id')): without one,
@@ -194,14 +190,12 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
 
     const fc = firstCall.get(l.source_id);
     const dial = fc && fc.at > l.date_added && londonDate(fc.at) === day ? fc : null;
-    const dialBy = dial ? firstName(dial.by) : null;
 
     const dated = ownerOn(history, l.location_id, day);
     const own = dated === undefined ? assigned.get(l.location_id) ?? null : dated;
-    let responsible: string;
-    if (own && (byDay.get(day) ?? []).some(s => s.csr === own)) responsible = own;
-    else if (dialBy && on.some(s => s.csr === dialBy)) responsible = dialBy;
-    else responsible = on[0].csr;
+    // Only the assigned setter answers for a lead, and only on a day she worked.
+    if (!own || !(byDay.get(day) ?? []).some(s => s.csr === own)) continue;
+    const responsible = own;
 
     const mins = dial ? (Date.parse(dial.at) - Date.parse(l.date_added)) / 60000 : null;
     const conn = firstConnected.get(l.source_id);

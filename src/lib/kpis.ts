@@ -26,15 +26,15 @@ export type CsrKpiRow = {
   sms: number;
   phonePct: number | null;   // phone booking ratio
   speedLeads: number;        // new leads on this CSR's clients that arrived during their shift
-  speedWithin: number;       // ...reached by phone within 30 min (by anyone — cover counts)
+  speedWithin: number;       // ...reached by phone within 30 min (by anyone)
   speedPct: number | null;   // speed to lead
 };
 
 // ─── Speed to Lead, by setter ────────────────────────────────────────────────
 // A setter is accountable for every new lead on the clients assigned to them
-// (clients.csr_key) that arrived while they were on shift — including leads nobody
-// phoned. When they're off, cover from whoever else was on shift counts (see
-// csrMetrics.getShiftCoverage). Per-client rows show which accounts drag the rate.
+// (clients.csr_key) that arrived on a day they worked — including leads nobody phoned.
+// Covers aren't tracked: leads on days they're off aren't measured (see
+// csrMetrics.evaluateLeads). Per-client rows show which accounts drag the rate.
 
 export type CsrSpeedClientRow = {
   client_id: string;
@@ -62,7 +62,7 @@ export async function getCsrSpeedToLead(month: string | null): Promise<CsrSpeedR
   const range = monthRange(month);
   const clients = setterClients(await getActiveClients());
   const nameOf = new Map(clients.map(c => [c.client_id, c.client_name]));
-  // Group by the setter RESPONSIBLE for each lead (assigned if on shift, else cover) —
+  // Group by the setter RESPONSIBLE for each lead (always the account's assigned setter) —
   // the same rule as Call Tracking's Shifts tab and the /api/speed-to-lead read-out, so
   // every surface agrees. Self-booked leads are left out.
   const leads = (await evaluateLeads(clients.map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null })), range)).filter(l => !l.selfBooked);
