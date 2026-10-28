@@ -17,7 +17,8 @@ import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 //                 the client's assigned setter ON THAT DAY (client_csr_assignments, falling
 //                 back to clients.csr_key) must have worked that day. Covers aren't
 //                 tracked: a lead on the account of a setter who was off that day, on an
-//                 account with no setter, or arriving when nobody's on, isn't measured.
+//                 account with no setter, arriving when nobody's on, or arriving while
+//                 that setter was on a break (lunch, sent by Viktor), isn't measured.
 //   SELF-BOOKED — a lead that paid a deposit within the 30-minute window, before anyone
 //                 dialled, sorted itself out and is left out of the measure. A lead that
 //                 paid later without a call is still a missed response; one that paid
@@ -67,22 +68,30 @@ async function pageAll<T>(build: (from: number, to: number) => PromiseLike<{ dat
   return out;
 }
 
-export type Shift = { date: string; csr: string; start: string; end: string; off: boolean };
+export type ShiftBreak = { start: string; end: string };
+export type Shift = { date: string; csr: string; start: string; end: string; off: boolean; breaks: ShiftBreak[] };
 
 export async function getShifts(range: DateRange): Promise<Shift[]> {
-  const { data } = await supabaseAdmin
+  const read = (cols: string) => supabaseAdmin
     .from('csr_shifts')
-    .select('shift_date, csr_key, shift_start, shift_end, off')
+    .select(cols)
     .gte('shift_date', range.since)
     .lte('shift_date', range.until)
     .order('shift_date')
     .order('shift_start');
-  return (data ?? []).map(r => ({
-    date: r.shift_date as string,
-    csr: r.csr_key as string,
+  // Before migration 0023 there's no breaks column; read shifts without it.
+  let res = await read('shift_date, csr_key, shift_start, shift_end, off, breaks');
+  if (res.error) res = await read('shift_date, csr_key, shift_start, shift_end, off');
+  const rows = (res.data ?? []) as unknown as { shift_date: string; csr_key: string; shift_start: string | null; shift_end: string | null; off: boolean; breaks?: unknown }[];
+  return rows.map(r => ({
+    date: r.shift_date,
+    csr: r.csr_key,
     start: r.off ? '' : String(r.shift_start ?? '').slice(0, 5),
     end: r.off ? '' : String(r.shift_end ?? '').slice(0, 5),
     off: !!r.off || !r.shift_start || !r.shift_end,
+    breaks: Array.isArray(r.breaks)
+      ? (r.breaks as { start?: unknown; end?: unknown }[]).filter(b => typeof b?.start === 'string' && typeof b?.end === 'string').map(b => ({ start: String(b.start).slice(0, 5), end: String(b.end).slice(0, 5) }))
+      : [],
   }));
 }
 
@@ -193,8 +202,11 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
 
     const dated = ownerOn(history, l.location_id, day);
     const own = dated === undefined ? assigned.get(l.location_id) ?? null : dated;
-    // Only the assigned setter answers for a lead, and only on a day she worked.
-    if (!own || !(byDay.get(day) ?? []).some(s => s.csr === own)) continue;
+    // Only the assigned setter answers for a lead, and only on a day she worked — and not
+    // while she's on a break (lunch).
+    const ownShift = own ? (byDay.get(day) ?? []).find(s => s.csr === own) : undefined;
+    if (!own || !ownShift) continue;
+    if (ownShift.breaks.some(b => t >= b.start && t < b.end)) continue;
     const responsible = own;
 
     const mins = dial ? (Date.parse(dial.at) - Date.parse(l.date_added)) / 60000 : null;
@@ -345,6 +357,7 @@ export type ShiftRow = {
   start: string;     // '' when off
   end: string;
   off: boolean;
+  breaks: ShiftBreak[]; // lunch etc. — leads arriving then aren't measured
   leads: number;     // leads this setter was responsible for that day
   attempted: number;
   connected: number;
@@ -410,7 +423,7 @@ export async function getSetterScorecard(clients: ClientAssign[], range: DateRan
     if (!isTrackedSetter(s.csr) || offTrackDay(s.date)) continue;
     const a = get(s.csr);
     if (!s.off) a.shifts++;
-    a.byDay.set(s.date, { date: s.date, csr: s.csr, start: s.start, end: s.end, off: s.off, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null, coverLeads: 0 });
+    a.byDay.set(s.date, { date: s.date, csr: s.csr, start: s.start, end: s.end, off: s.off, breaks: s.breaks, leads: 0, attempted: 0, connected: 0, neverCalled: 0, pct: null, coverLeads: 0 });
   }
 
   for (const l of leads) {

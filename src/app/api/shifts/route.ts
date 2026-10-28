@@ -10,6 +10,12 @@ import { supabaseAdmin } from '@/lib/supabase';
 //   Body: one row or an array of rows —
 //     { "date": "2026-09-24", "csr_name": "Cathy", "shift_start": "8:00", "shift_end": "18:00" }
 //     { "date": "2026-09-28", "csr_name": "Alexis", "off": true }
+//     { "date": "2026-10-26", "csr_name": "Maddie", "shift_start": "9", "shift_end": "6",
+//       "breaks": [{ "start": "1", "end": "2pm" }] }
+//
+// "breaks" (lunch etc.) is optional: leads arriving while the account's setter is on a
+// break aren't measured for Speed to Lead. Leave it out to keep the breaks already stored
+// for that day; send [] to clear them. Break times parse like shift times.
 //
 // Times are London local. Accepted forms: "8", "8:30", "8.30", "08:30", "6pm", "6:30pm".
 // An end hour ≤ 12 with no am/pm is read as afternoon ("8-6" ⇒ 08:00–18:00), and a start
@@ -17,7 +23,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
-type Row = { date: string; csr_name: string; shift_start?: string | null; shift_end?: string | null; off?: boolean };
+type Row = { date: string; csr_name: string; shift_start?: string | null; shift_end?: string | null; off?: boolean; breaks?: unknown };
 
 function parseTime(raw: unknown, assumePm: boolean): string | null {
   if (raw == null) return null;
@@ -53,7 +59,18 @@ function parseRow(r: unknown): { row: Record<string, unknown> } | { error: strin
     if (!shift_start || !shift_end) return { error: `bad times "${x.shift_start}"–"${x.shift_end}" for ${csr_name} on ${date}` };
     if (shift_end <= shift_start) return { error: `shift ends before it starts (${shift_start}–${shift_end}) for ${csr_name} on ${date}` };
   }
-  return { row: { shift_date: date, csr_key, csr_name, shift_start, shift_end, off, source: 'viktor', raw: x } };
+  const row: Record<string, unknown> = { shift_date: date, csr_key, csr_name, shift_start, shift_end, off, source: 'viktor', raw: x };
+  if (x.breaks !== undefined) {
+    if (!Array.isArray(x.breaks)) return { error: `breaks must be a list for ${csr_name} on ${date}` };
+    const breaks: { start: string; end: string }[] = [];
+    for (const b of x.breaks as { start?: unknown; end?: unknown }[]) {
+      const start = parseTime(b?.start, false), end = parseTime(b?.end, true);
+      if (!start || !end || end <= start) return { error: `bad break "${b?.start}"–"${b?.end}" for ${csr_name} on ${date}` };
+      breaks.push({ start, end });
+    }
+    row.breaks = off ? [] : breaks;
+  }
+  return { row };
 }
 
 export async function POST(req: Request) {
@@ -76,8 +93,13 @@ export async function POST(req: Request) {
   });
   if (rows.length === 0) return Response.json({ ok: false, error: 'no valid rows', errors }, { status: 400 });
 
-  const { error } = await supabaseAdmin.from('csr_shifts').upsert(rows, { onConflict: 'csr_key,shift_date' });
-  if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
+  // Rows with and without "breaks" go separately, so a row that leaves breaks out keeps
+  // the ones already stored rather than having them blanked.
+  for (const batch of [rows.filter(r => 'breaks' in r), rows.filter(r => !('breaks' in r))]) {
+    if (batch.length === 0) continue;
+    const { error } = await supabaseAdmin.from('csr_shifts').upsert(batch, { onConflict: 'csr_key,shift_date' });
+    if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
+  }
 
   return Response.json({ ok: true, written: rows.length, rejected: errors.length, errors });
 }

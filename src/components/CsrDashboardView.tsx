@@ -787,7 +787,7 @@ function ShiftCell({ r }: { r: ShiftRow }) {
   const day = Number(r.date.slice(8, 10));
   const label = r.off
     ? `${fmtDay(r.date)} · off`
-    : `${fmtDay(r.date)} · ${r.start}–${r.end} · ${r.leads === 0 ? 'no leads' : `${r.attempted} of ${r.leads} dialled ≤${SPEED_TO_LEAD_MINUTES}m (${r.pct}%)`}${r.coverLeads ? ` · ${r.coverLeads} cover` : ''}`;
+    : `${fmtDay(r.date)} · ${r.start}–${r.end}${r.breaks.map(b => ` · break ${b.start}–${b.end}`).join('')} · ${r.leads === 0 ? 'no leads' : `${r.attempted} of ${r.leads} dialled ≤${SPEED_TO_LEAD_MINUTES}m (${r.pct}%)`}${r.coverLeads ? ` · ${r.coverLeads} cover` : ''}`;
   const cls = r.off ? 'bg-border text-fg-dim'
     : r.leads === 0 ? 'border border-border bg-surface-2 text-fg-dim'
     : onTarget(r.pct) ? 'bg-green text-black'
