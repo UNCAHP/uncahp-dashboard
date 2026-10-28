@@ -17,8 +17,9 @@ import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 //                 the client's assigned setter ON THAT DAY (client_csr_assignments, falling
 //                 back to clients.csr_key) must have worked that day. Covers aren't
 //                 tracked: a lead on the account of a setter who was off that day, on an
-//                 account with no setter, arriving when nobody's on, or arriving while
-//                 that setter was on a break (lunch, sent by Viktor), isn't measured.
+//                 account with no setter, arriving outside that setter's own shift
+//                 (before she starts or after she finishes), or arriving while she was on
+//                 a break (lunch, sent by Viktor), isn't measured.
 //   SELF-BOOKED — a lead that paid a deposit within the 30-minute window, before anyone
 //                 dialled, sorted itself out and is left out of the measure. A lead that
 //                 paid later without a call is still a missed response; one that paid
@@ -30,8 +31,8 @@ import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 //
 // Only calls made on the day the lead arrived count; a call on a later day leaves the lead
 // "never phoned" for that day. Credit for an attempt goes to whoever dialled first.
-// Accountability for a lead always goes to the account's assigned setter for that day —
-// even if it arrived after her shift ended. Nobody is measured on a colleague's accounts.
+// Accountability for a lead always goes to the account's assigned setter for that day, and
+// only for leads that arrive during her shift. Nobody is measured on a colleague's accounts.
 
 const CONVERSATION_MIN_SEC = 60;
 
@@ -202,9 +203,9 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
 
     const dated = ownerOn(history, l.location_id, day);
     const own = dated === undefined ? assigned.get(l.location_id) ?? null : dated;
-    // Only the assigned setter answers for a lead, and only on a day she worked — and not
-    // while she's on a break (lunch).
-    const ownShift = own ? (byDay.get(day) ?? []).find(s => s.csr === own) : undefined;
+    // Only the assigned setter answers for a lead, and only while she's on shift — not
+    // before she starts, after she finishes, or while she's on a break (lunch).
+    const ownShift = own ? on.find(s => s.csr === own) : undefined;
     if (!own || !ownShift) continue;
     if (ownShift.breaks.some(b => t >= b.start && t < b.end)) continue;
     const responsible = own;
