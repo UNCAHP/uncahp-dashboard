@@ -26,6 +26,8 @@ import { getBookingsBoard, type BookingsBoard } from '@/lib/csrBookings';
 import { BookingsView } from '@/components/BookingsView';
 import { AllBookingsView } from '@/components/AllBookingsView';
 import { KpisView } from '@/components/KpisView';
+import { OffersView } from '@/components/OffersView';
+import { getActiveOffers } from '@/lib/offers';
 import { getSplitTests, type SplitTest } from '@/lib/splitTests';
 import { getBookings, getBookingMonths, getMonthCost, getAllBookings, getAllBookingMonths, type Booking, type BookingMonthCost } from '@/lib/bookingsAdmin';
 import { getCsrScorecard, getKpiMonths, getCsrDaily, getSheetSyncAgeHours, getCsrSpeedToLead, type CsrKpiRow, type CsrDayRow, type CsrSpeedRow } from '@/lib/kpis';
@@ -44,11 +46,11 @@ import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
+type View = 'overview' | 'client' | 'funnel' | 'offers' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
 type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; csr?: string; part?: string };
 
 function parseView(v: string | undefined): View {
-  const allowed: View[] = ['overview', 'client', 'funnel', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
+  const allowed: View[] = ['overview', 'client', 'funnel', 'offers', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
   return (allowed as string[]).includes(v ?? '') ? (v as View) : 'overview';
 }
 
@@ -104,7 +106,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
     if (!allowed && !params.client) reroute({ view: 'calls', csr: scope[0] ?? 'team', part: params.csr ? undefined : params.part, since: params.since, until: params.until });
   }
 
-  const scopedClient = view === 'client' ? (params.client?.trim() || undefined) : undefined;
+  const scopedClient = view === 'client' || view === 'offers' ? (params.client?.trim() || undefined) : undefined;
   const clients = await getClientList();
   return (
     <div className="flex min-h-screen bg-bg text-fg">
@@ -268,6 +270,10 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
     [kpiRows, kpiDaily, kpiSyncAgeHours, kpiSpeed] = await Promise.all([getCsrScorecard(kpiMonth), getCsrDaily(kpiMonth), getSheetSyncAgeHours(), getCsrSpeedToLead(kpiMonth)]);
   }
 
+  // Offers: every campaign live in a client's Meta ad account, read from Meta on load.
+  const offersClient = view === 'offers' ? clientFilter : undefined;
+  const offersData = view === 'offers' ? await getActiveOffers(range, offersClient) : null;
+
   // Admin Panel: the people with access and what each role can open.
   const adminData = view === 'admin' ? { users: await getAdminUsers(), roles: await getRoles() } : null;
 
@@ -278,6 +284,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
     overview: { title: 'Portfolio Overview', subtitle: `${rows.length} clients · ${range.label.toLowerCase()}` },
     client: { title: 'Client View', subtitle: activeClient?.client_name ?? 'No client selected' },
     funnel: { title: 'Funnel Analytics', subtitle: 'Aggregate funnel performance' },
+    offers: { title: 'Offers', subtitle: offersClient ? (clients.find(c => c.client_id === offersClient)?.client_name ?? 'Live ads') : 'Live ads in every client account' },
     calls: { title: 'CSR Dashboard', subtitle: callsClientName ?? (csrSel ? (csrSel === 'team' ? 'CSR Team' : CSR_SETTERS.find(s => s.key === csrSel)?.label ?? null) : 'Bookings and Speed to Lead') },
     bookings: { title: 'Bookings', subtitle: bookingsClientName },
     kpis: { title: 'KPIs', subtitle: 'Team performance by role' },
@@ -294,7 +301,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
         since={range.since}
         until={range.until}
         view={view}
-        client={view === 'funnel' ? funnelClientId : view === 'calls' ? callsClient : scopedClient}
+        client={view === 'funnel' ? funnelClientId : view === 'calls' ? callsClient : view === 'offers' ? offersClient : scopedClient}
         funnel={funnelFilter}
       />
         {view === 'overview' && <OverviewView rows={rows} totals={totals} rangeDays={rangeDays} since={range.since} until={range.until} />}
@@ -323,6 +330,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
             until={range.until}
           />
         )}
+        {view === 'offers' && offersData && <OffersView data={offersData} clients={clients} client={offersClient ?? null} rangeLabel={range.label} since={range.since} until={range.until} />}
         {view === 'calls' && (
           <CsrDashboardView
             visible={(() => { const scope = csrScope(user); return scope ? ['team', ...scope] : null; })()}

@@ -2,19 +2,20 @@
 
 import { NavLink, useNav } from '@/components/NavProgress';
 import { useState } from 'react';
-import { LayoutGrid, BarChart3, FlaskConical, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search, LogOut } from 'lucide-react';
+import { LayoutGrid, BarChart3, FlaskConical, Megaphone, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search, LogOut } from 'lucide-react';
 import { signOutAction } from '@/app/actions/auth';
 import type { ClientOption } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/Tooltip';
 
-type View = 'overview' | 'client' | 'funnel' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
+type View = 'overview' | 'client' | 'funnel' | 'offers' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
 
 const NAV: Array<{ id: View; label: string; icon: typeof LayoutGrid }> = [
   { id: 'overview', label: 'Portfolio Overview', icon: LayoutGrid },
   { id: 'client', label: 'Client View', icon: BarChart3 },
   { id: 'funnel', label: 'Funnel Analytics', icon: FlaskConical },
+  { id: 'offers', label: 'Offers', icon: Megaphone },
   { id: 'calls', label: 'CSR Dashboard', icon: Phone },
   // Bookings is archived for now — hidden from the nav, but the page, its data, and the
   // bookings feed into the KPI scorecard all still work. Reachable at /?view=bookings, and
@@ -54,7 +55,9 @@ export function Sidebar({
   userRole: string;
 }) {
   const nav = NAV.filter(item => pages.includes(item.id));
-  const showClients = pages.includes('client');
+  // On Offers the client list filters the offers; everywhere else it opens Client View.
+  const clientView: View = view === 'offers' ? 'offers' : 'client';
+  const showClients = pages.includes('client') || view === 'offers';
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState('');
 
@@ -63,7 +66,7 @@ export function Sidebar({
   // The clicked item lights up at once, while its page is still loading.
   const { target } = useNav();
   const navHrefs = nav.map(item => buildHref({ view: item.id, client: item.id === 'client' ? selectedClient : undefined, since, until }));
-  const clientHref = (id: string) => buildHref({ view: 'client', client: id, since, until });
+  const clientHref = (id: string) => buildHref({ view: clientView, client: id, since, until });
   const jumping = !!target && (navHrefs.includes(target) || clients.some(c => clientHref(c.client_id) === target));
 
   return (
@@ -149,8 +152,10 @@ export function Sidebar({
 
           <div className="flex-1 space-y-0.5 overflow-y-auto px-3 pb-3">
             {filtered.map(c => {
-              const href = clientHref(c.client_id);
-              const active = jumping ? target === href : view === 'client' && selectedClient === c.client_id;
+              const on = view === clientView && selectedClient === c.client_id;
+              // On Offers, pressing the selected client again shows every client.
+              const href = on && clientView === 'offers' ? buildHref({ view: 'offers', since, until }) : clientHref(c.client_id);
+              const active = jumping ? target === href && !on : on;
               return (
                 <NavLink
                   key={c.client_id}

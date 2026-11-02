@@ -74,7 +74,7 @@ type MetaAction = { action_type?: string; value?: string };
 // tiebreaker. A query filtered on a date range should ALSO order by that date column first
 // (.order('date') etc.): ordering by id alone makes Postgres walk the primary key instead
 // of the date index, which on meta_daily_stats ran past the anon role's statement timeout.
-async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
+export async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
   const PAGE = 1000;
   const out: T[] = [];
   let from = 0;

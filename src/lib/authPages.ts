@@ -5,6 +5,7 @@ export const PAGES = [
   { key: 'overview', label: 'Portfolio Overview' },
   { key: 'client', label: 'Client View' },
   { key: 'funnel', label: 'Funnel Analytics' },
+  { key: 'offers', label: 'Offers' },
   { key: 'calls', label: 'CSR Dashboard' },
   { key: 'kpis', label: 'KPIs' },
   { key: 'clients', label: 'Clients' },
