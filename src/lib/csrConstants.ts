@@ -25,6 +25,13 @@ export const REF_TAG_RE = /^[a-z0-9&]+-[a-z0-9]+-\d{2}-[a-z]{3}\d{2}$/i;
 export const hasRefTag = (tags: unknown): boolean =>
   Array.isArray(tags) && tags.some(t => typeof t === 'string' && REF_TAG_RE.test(t.trim()));
 
+// Individual leads taken out of Speed to Lead by hand (a one-off the setter shouldn't
+// answer for). Keyed by the GHL contact id (ghl_contacts.source_id). The lead still counts
+// everywhere else (opt-ins, funnels); only Speed to Lead skips it. Note why on each line.
+export const SPEED_EXCLUDED_LEADS: Record<string, string> = {
+  WILQApbs6CHxwvQQZmOG: 'Skin and Heal, julia f, 2026-11-04 11:59: slipped through, taken out on request',
+};
+
 // Confirmed bookings + Phone booking ratio on the CSR scorecard. These no longer come from
 // the (archived) in-dashboard booking log — they're synced daily from the Appointment
 // Setting Tracker sheet into csr_sheet_bookings. Set to false to park both columns as

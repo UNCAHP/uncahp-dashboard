@@ -1,6 +1,6 @@
 import { supabase, supabaseAdmin } from './supabase';
 import type { DateRange } from './queries';
-import { SPEED_TO_LEAD_MINUTES, SPEED_DAY_START, SPEED_WEEKDAYS_ONLY, hasRefTag, isTrackedSetter } from './csrConstants';
+import { SPEED_TO_LEAD_MINUTES, SPEED_DAY_START, SPEED_WEEKDAYS_ONLY, SPEED_EXCLUDED_LEADS, hasRefTag, isTrackedSetter } from './csrConstants';
 import { isTestLead } from '@/lib/testLeads';
 import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 
@@ -192,6 +192,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
   for (const l of contacts) {
     if (!l.date_added || !String(l.phone ?? '').trim() || !hasRefTag(l.tags)) continue;
     if (isTestLead(l)) continue; // the team's own test submissions aren't leads
+    if (l.source_id in SPEED_EXCLUDED_LEADS) continue; // taken out by hand
     const day = londonDate(l.date_added);
     const t = londonClock(l.date_added);
     // The measured part of a shift runs from 10:30 (or its start, if later) to its end.
