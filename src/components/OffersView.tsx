@@ -200,10 +200,19 @@ function OfferCard({ o, onOpen }: { o: Offer; onOpen: () => void }) {
   const pages = pagesOf(o);
   const extra = o.ads.length - THUMBS;
   return (
-    <article className="flex flex-col rounded-2xl border border-border bg-surface p-5 transition-colors hover:border-pink/40">
+    // The whole card opens the full offer. Links and buttons inside it (ad previews, page
+    // links) keep their own action, and a click that ends a text selection doesn't open it.
+    <article
+      onClick={e => {
+        if ((e.target as HTMLElement).closest('a, button')) return;
+        if (window.getSelection()?.toString()) return;
+        onOpen();
+      }}
+      className="group flex cursor-pointer flex-col rounded-2xl border border-border bg-surface p-5 transition-colors hover:border-pink/40"
+    >
       <header className="flex items-start justify-between gap-3">
         <button onClick={onOpen} className="min-w-0 text-left">
-          <h3 className="text-sm font-semibold leading-snug text-fg hover:text-pink">{o.name}</h3>
+          <h3 className="text-sm font-semibold leading-snug text-fg group-hover:text-pink">{o.name}</h3>
           {o.funnel && <p className="mt-0.5 truncate text-xs text-fg-muted">Funnel: {o.funnel.name}</p>}
         </button>
         <OfferTags o={o} />
