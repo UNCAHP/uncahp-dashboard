@@ -2,20 +2,21 @@
 
 import { NavLink, useNav } from '@/components/NavProgress';
 import { useState } from 'react';
-import { LayoutGrid, BarChart3, FlaskConical, Megaphone, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search, LogOut } from 'lucide-react';
+import { LayoutGrid, BarChart3, FlaskConical, Megaphone, Map as MapIcon, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search, LogOut } from 'lucide-react';
 import { signOutAction } from '@/app/actions/auth';
 import type { ClientOption } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/Tooltip';
 
-type View = 'overview' | 'client' | 'funnel' | 'offers' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
+type View = 'overview' | 'client' | 'funnel' | 'offers' | 'map' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
 
 const NAV: Array<{ id: View; label: string; icon: typeof LayoutGrid }> = [
   { id: 'overview', label: 'Portfolio Overview', icon: LayoutGrid },
   { id: 'client', label: 'Client View', icon: BarChart3 },
   { id: 'funnel', label: 'Funnel Analytics', icon: FlaskConical },
   { id: 'offers', label: 'Offers', icon: Megaphone },
+  { id: 'map', label: 'Client Map', icon: MapIcon },
   { id: 'calls', label: 'CSR Dashboard', icon: Phone },
   // Bookings is archived for now — hidden from the nav, but the page, its data, and the
   // bookings feed into the KPI scorecard all still work. Reachable at /?view=bookings, and

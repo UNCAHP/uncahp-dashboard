@@ -28,6 +28,8 @@ import { AllBookingsView } from '@/components/AllBookingsView';
 import { KpisView } from '@/components/KpisView';
 import { OffersView } from '@/components/OffersView';
 import { getActiveOffers } from '@/lib/offers';
+import { ClientMapView } from '@/components/ClientMapView';
+import { getClientMap } from '@/lib/clientMap';
 import { getSplitTests, type SplitTest } from '@/lib/splitTests';
 import { getBookings, getBookingMonths, getMonthCost, getAllBookings, getAllBookingMonths, type Booking, type BookingMonthCost } from '@/lib/bookingsAdmin';
 import { getCsrScorecard, getKpiMonths, getCsrDaily, getSheetSyncAgeHours, getCsrSpeedToLead, type CsrKpiRow, type CsrDayRow, type CsrSpeedRow } from '@/lib/kpis';
@@ -46,11 +48,11 @@ import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-type View = 'overview' | 'client' | 'funnel' | 'offers' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
+type View = 'overview' | 'client' | 'funnel' | 'offers' | 'map' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
 type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; csr?: string; part?: string };
 
 function parseView(v: string | undefined): View {
-  const allowed: View[] = ['overview', 'client', 'funnel', 'offers', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
+  const allowed: View[] = ['overview', 'client', 'funnel', 'offers', 'map', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
   return (allowed as string[]).includes(v ?? '') ? (v as View) : 'overview';
 }
 
@@ -274,6 +276,9 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
   const offersClient = view === 'offers' ? clientFilter : undefined;
   const offersData = view === 'offers' ? await getActiveOffers(range, offersClient) : null;
 
+  // Client Map: every active clinic, placed from the address on its GHL sub-account.
+  const mapData = view === 'map' ? await getClientMap() : null;
+
   // Admin Panel: the people with access and what each role can open.
   const adminData = view === 'admin' ? { users: await getAdminUsers(), roles: await getRoles() } : null;
 
@@ -285,6 +290,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
     client: { title: 'Client View', subtitle: activeClient?.client_name ?? 'No client selected' },
     funnel: { title: 'Funnel Analytics', subtitle: 'Aggregate funnel performance' },
     offers: { title: 'Offers', subtitle: offersClient ? (clients.find(c => c.client_id === offersClient)?.client_name ?? 'Live ads') : 'Live ads in every client account' },
+    map: { title: 'Client Map', subtitle: mapData ? `${mapData.pins.length} active clinics` : null },
     calls: { title: 'CSR Dashboard', subtitle: callsClientName ?? (csrSel ? (csrSel === 'team' ? 'CSR Team' : CSR_SETTERS.find(s => s.key === csrSel)?.label ?? null) : 'Bookings and Speed to Lead') },
     bookings: { title: 'Bookings', subtitle: bookingsClientName },
     kpis: { title: 'KPIs', subtitle: 'Team performance by role' },
@@ -331,6 +337,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
           />
         )}
         {view === 'offers' && offersData && <OffersView data={offersData} clients={clients} client={offersClient ?? null} rangeLabel={range.label} since={range.since} until={range.until} />}
+        {view === 'map' && mapData && <ClientMapView data={mapData} since={range.since} until={range.until} />}
         {view === 'calls' && (
           <CsrDashboardView
             visible={(() => { const scope = csrScope(user); return scope ? ['team', ...scope] : null; })()}
