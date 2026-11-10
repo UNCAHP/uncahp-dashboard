@@ -8,6 +8,7 @@ import type { ClientMapData, ClientPin } from '@/lib/clientMap';
 import { CSR_SETTERS } from '@/lib/csrConstants';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn } from '@/lib/utils';
+import { createDarkMap, escHtml as esc, spreadPoints } from '@/lib/leafletMap';
 
 // ─── Client Map ──────────────────────────────────────────────────────────────
 // Every active client's clinic on a map of the UK, from the address on its GHL
@@ -16,27 +17,6 @@ import { cn } from '@/lib/utils';
 // with the reason, so the address can be fixed in GHL.
 
 const setterLabel = (k: string | null) => (k ? CSR_SETTERS.find(s => s.key === k)?.label ?? k : 'No setter');
-
-const esc = (s: string) => s.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
-
-// Clinics sharing a postcode (TAG's two accounts) would sit on one spot. Spread them
-// round a small circle so each pin can be clicked.
-function spread(pins: ClientPin[]): Map<string, [number, number]> {
-  const groups = new Map<string, ClientPin[]>();
-  for (const p of pins) {
-    const k = `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
-    groups.set(k, [...(groups.get(k) ?? []), p]);
-  }
-  const out = new Map<string, [number, number]>();
-  for (const g of groups.values()) {
-    g.forEach((p, i) => {
-      if (g.length === 1) { out.set(p.client_id, [p.lat, p.lng]); return; }
-      const a = (2 * Math.PI * i) / g.length;
-      out.set(p.client_id, [p.lat + 0.0012 * Math.sin(a), p.lng + 0.0019 * Math.cos(a)]);
-    });
-  }
-  return out;
-}
 
 function pinHtml(p: ClientPin): string {
   const inner = p.logo_url
@@ -88,15 +68,8 @@ export function ClientMapView({ data, since, until }: { data: ClientMapData; sin
     (async () => {
       const L = (await import('leaflet')).default;
       if (cancelled || !el.current || map.current) return;
-      const m = L.map(el.current, { zoomControl: true, attributionControl: true, scrollWheelZoom: true });
-      // OpenStreetMap's own tiles: free, no key (CARTO's now ask for one). They're light, so
-      // the client-map-tiles class darkens them with a CSS filter to match the dashboard.
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        className: 'client-map-tiles',
-        maxZoom: 19,
-      }).addTo(m);
-      const at = spread(data.pins);
+      const m = createDarkMap(L, el.current);
+      const at = spreadPoints(data.pins, p => p.client_id);
       for (const p of data.pins) {
         const icon = L.divIcon({ html: pinHtml(p), className: '', iconSize: [36, 36], iconAnchor: [18, 18], popupAnchor: [0, -18] });
         const mk = L.marker(at.get(p.client_id) ?? [p.lat, p.lng], { icon, title: p.client_name, riseOnHover: true })

@@ -30,6 +30,8 @@ import { OffersView } from '@/components/OffersView';
 import { getActiveOffers } from '@/lib/offers';
 import { ClientMapView } from '@/components/ClientMapView';
 import { getClientMap } from '@/lib/clientMap';
+import { CompetitorsView } from '@/components/CompetitorsView';
+import { getCompetitorScans, getCompetitorScan } from '@/lib/competitors';
 import { getSplitTests, type SplitTest } from '@/lib/splitTests';
 import { getBookings, getBookingMonths, getMonthCost, getAllBookings, getAllBookingMonths, type Booking, type BookingMonthCost } from '@/lib/bookingsAdmin';
 import { getCsrScorecard, getKpiMonths, getCsrDaily, getSheetSyncAgeHours, getCsrSpeedToLead, type CsrKpiRow, type CsrDayRow, type CsrSpeedRow } from '@/lib/kpis';
@@ -47,12 +49,14 @@ import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+// A competitor scan (a server action on this page) reads up to 8 sites through Firecrawl.
+export const maxDuration = 120;
 
-type View = 'overview' | 'client' | 'funnel' | 'offers' | 'map' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
-type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; csr?: string; part?: string };
+type View = 'overview' | 'client' | 'funnel' | 'offers' | 'map' | 'competitors' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
+type SearchParams = { days?: string; since?: string; until?: string; client?: string; view?: string; funnel?: string; fstatus?: string; month?: string; csr?: string; part?: string; scan?: string };
 
 function parseView(v: string | undefined): View {
-  const allowed: View[] = ['overview', 'client', 'funnel', 'offers', 'map', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
+  const allowed: View[] = ['overview', 'client', 'funnel', 'offers', 'map', 'competitors', 'calls', 'bookings', 'kpis', 'clients', 'admin'];
   return (allowed as string[]).includes(v ?? '') ? (v as View) : 'overview';
 }
 
@@ -108,7 +112,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
     if (!allowed && !params.client) reroute({ view: 'calls', csr: scope[0] ?? 'team', part: params.csr ? undefined : params.part, since: params.since, until: params.until });
   }
 
-  const scopedClient = view === 'client' || view === 'offers' ? (params.client?.trim() || undefined) : undefined;
+  const scopedClient = view === 'client' || view === 'offers' || view === 'competitors' ? (params.client?.trim() || undefined) : undefined;
   const clients = await getClientList();
   return (
     <div className="flex min-h-screen bg-bg text-fg">
@@ -279,6 +283,13 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
   // Client Map: every active clinic, placed from the address on its GHL sub-account.
   const mapData = view === 'map' ? await getClientMap() : null;
 
+  // Competitors: saved price scans (optionally one client's) and the one being looked at —
+  // ?scan=, else the newest.
+  const compClient = view === 'competitors' ? clientFilter : undefined;
+  const compList = view === 'competitors' ? await getCompetitorScans(compClient) : null;
+  const compScanId = view === 'competitors' ? (params.scan || compList?.scans[0]?.id) : undefined;
+  const compScan = compScanId ? await getCompetitorScan(compScanId) : null;
+
   // Admin Panel: the people with access and what each role can open.
   const adminData = view === 'admin' ? { users: await getAdminUsers(), roles: await getRoles() } : null;
 
@@ -290,6 +301,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
     client: { title: 'Client View', subtitle: activeClient?.client_name ?? 'No client selected' },
     funnel: { title: 'Funnel Analytics', subtitle: 'Aggregate funnel performance' },
     offers: { title: 'Offers', subtitle: offersClient ? (clients.find(c => c.client_id === offersClient)?.client_name ?? 'Live ads') : 'Live ads in every client account' },
+    competitors: { title: 'Competitors', subtitle: compClient ? (clients.find(c => c.client_id === compClient)?.client_name ?? 'Price scans') : 'Treatment prices at nearby clinics' },
     map: { title: 'Client Map', subtitle: mapData ? `${mapData.pins.length} active clinics` : null },
     calls: { title: 'CSR Dashboard', subtitle: callsClientName ?? (csrSel ? (csrSel === 'team' ? 'CSR Team' : CSR_SETTERS.find(s => s.key === csrSel)?.label ?? null) : 'Bookings and Speed to Lead') },
     bookings: { title: 'Bookings', subtitle: bookingsClientName },
@@ -307,7 +319,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
         since={range.since}
         until={range.until}
         view={view}
-        client={view === 'funnel' ? funnelClientId : view === 'calls' ? callsClient : view === 'offers' ? offersClient : scopedClient}
+        client={view === 'funnel' ? funnelClientId : view === 'calls' ? callsClient : view === 'offers' ? offersClient : view === 'competitors' ? compClient : scopedClient}
         funnel={funnelFilter}
       />
         {view === 'overview' && <OverviewView rows={rows} totals={totals} rangeDays={rangeDays} since={range.since} until={range.until} />}
@@ -337,6 +349,9 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
           />
         )}
         {view === 'offers' && offersData && <OffersView data={offersData} clients={clients} client={offersClient ?? null} rangeLabel={range.label} since={range.since} until={range.until} />}
+        {view === 'competitors' && compList && (
+          <CompetitorsView scans={compList.scans} ready={compList.ready} scan={compScan} clients={clients} client={compClient ?? null} since={range.since} until={range.until} />
+        )}
         {view === 'map' && mapData && <ClientMapView data={mapData} since={range.since} until={range.until} />}
         {view === 'calls' && (
           <CsrDashboardView

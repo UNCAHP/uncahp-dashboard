@@ -2,14 +2,14 @@
 
 import { NavLink, useNav } from '@/components/NavProgress';
 import { useState } from 'react';
-import { LayoutGrid, BarChart3, FlaskConical, Megaphone, Map as MapIcon, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search, LogOut } from 'lucide-react';
+import { LayoutGrid, BarChart3, FlaskConical, Megaphone, Map as MapIcon, ScanSearch, Phone, Target, Building2, Shield, ChevronLeft, ChevronRight, Search, LogOut } from 'lucide-react';
 import { signOutAction } from '@/app/actions/auth';
 import type { ClientOption } from '@/lib/queries';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/Tooltip';
 
-type View = 'overview' | 'client' | 'funnel' | 'offers' | 'map' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
+type View = 'overview' | 'client' | 'funnel' | 'offers' | 'map' | 'competitors' | 'calls' | 'bookings' | 'kpis' | 'clients' | 'admin';
 
 const NAV: Array<{ id: View; label: string; icon: typeof LayoutGrid }> = [
   { id: 'overview', label: 'Portfolio Overview', icon: LayoutGrid },
@@ -17,6 +17,7 @@ const NAV: Array<{ id: View; label: string; icon: typeof LayoutGrid }> = [
   { id: 'funnel', label: 'Funnel Analytics', icon: FlaskConical },
   { id: 'offers', label: 'Offers', icon: Megaphone },
   { id: 'map', label: 'Client Map', icon: MapIcon },
+  { id: 'competitors', label: 'Competitors', icon: ScanSearch },
   { id: 'calls', label: 'CSR Dashboard', icon: Phone },
   // Bookings is archived for now — hidden from the nav, but the page, its data, and the
   // bookings feed into the KPI scorecard all still work. Reachable at /?view=bookings, and
@@ -56,9 +57,10 @@ export function Sidebar({
   userRole: string;
 }) {
   const nav = NAV.filter(item => pages.includes(item.id));
-  // On Offers the client list filters the offers; everywhere else it opens Client View.
-  const clientView: View = view === 'offers' ? 'offers' : 'client';
-  const showClients = pages.includes('client') || view === 'offers';
+  // On Offers and Competitors the client list filters that page; everywhere else it opens
+  // Client View.
+  const clientView: View = view === 'offers' || view === 'competitors' ? view : 'client';
+  const showClients = pages.includes('client') || clientView !== 'client';
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState('');
 
@@ -154,8 +156,8 @@ export function Sidebar({
           <div className="flex-1 space-y-0.5 overflow-y-auto px-3 pb-3">
             {filtered.map(c => {
               const on = view === clientView && selectedClient === c.client_id;
-              // On Offers, pressing the selected client again shows every client.
-              const href = on && clientView === 'offers' ? buildHref({ view: 'offers', since, until }) : clientHref(c.client_id);
+              // On Offers and Competitors, pressing the selected client again shows every client.
+              const href = on && clientView !== 'client' ? buildHref({ view: clientView, since, until }) : clientHref(c.client_id);
               const active = jumping ? target === href && !on : on;
               return (
                 <NavLink

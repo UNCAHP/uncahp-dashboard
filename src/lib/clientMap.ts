@@ -30,9 +30,9 @@ export type ClientMapData = {
   missing: { client_id: string; client_name: string; reason: string }[];
 };
 
-type GhlLocation = { address?: string; city?: string; postalCode?: string; country?: string };
+type GhlLocation = { address?: string; city?: string; postalCode?: string; country?: string; website?: string };
 
-async function ghlLocation(locationId: string, key: string): Promise<GhlLocation | null> {
+export async function ghlLocation(locationId: string, key: string): Promise<GhlLocation | null> {
   try {
     const r = await fetch(`${GHL}/locations/${locationId}`, {
       headers: { Authorization: `Bearer ${key}`, Version: '2021-07-28' },
@@ -46,9 +46,9 @@ async function ghlLocation(locationId: string, key: string): Promise<GhlLocation
   }
 }
 
-type Point = { lat: number; lng: number; approx: boolean };
+export type Point = { lat: number; lng: number; approx: boolean };
 
-async function geocode(postcode: string): Promise<Point | null> {
+export async function geocode(postcode: string): Promise<Point | null> {
   const pc = postcode.trim().toUpperCase().replace(/\s+/g, ' ');
   if (!pc) return null;
   const get = async (path: string) => {
@@ -70,19 +70,41 @@ async function geocode(postcode: string): Promise<Point | null> {
   return area ? { ...area, approx: true } : null;
 }
 
-export async function getClientMap(): Promise<ClientMapData> {
-  const clients = await getActiveClients();
-  const ids = clients.map(c => c.client_id);
+// The GHL key to read each location with. Prefers the active key; a switched-off one can
+// often still read the business address.
+async function ghlKeys(ids: string[]): Promise<Map<string, string>> {
   const { data: keys } = await supabaseAdmin
     .from('ghl_api_keys')
     .select('location_id, api_key, is_active')
     .in('location_id', ids);
-  // Prefer the active key; a switched-off one can often still read the business address.
   const keyFor = new Map<string, string>();
   for (const k of (keys ?? []) as { location_id: string; api_key: string | null; is_active: boolean }[]) {
     if (!k.api_key) continue;
     if (k.is_active || !keyFor.has(k.location_id)) keyFor.set(k.location_id, k.api_key);
   }
+  return keyFor;
+}
+
+// One client's clinic: address from GHL and its map position. null when GHL can't say.
+export async function clientLocation(clientId: string): Promise<{ address: string; city: string; postcode: string; website: string; point: Point | null } | null> {
+  const key = (await ghlKeys([clientId])).get(clientId);
+  if (!key) return null;
+  const loc = await ghlLocation(clientId, key);
+  if (!loc) return null;
+  const postcode = (loc.postalCode ?? '').trim().toUpperCase();
+  return {
+    address: (loc.address ?? '').trim(),
+    city: (loc.city ?? '').trim(),
+    postcode,
+    website: (loc.website ?? '').trim(),
+    point: postcode ? await geocode(postcode) : null,
+  };
+}
+
+export async function getClientMap(): Promise<ClientMapData> {
+  const clients = await getActiveClients();
+  const ids = clients.map(c => c.client_id);
+  const keyFor = await ghlKeys(ids);
 
   const results = await Promise.all(clients.map(async c => {
     const key = keyFor.get(c.client_id);
