@@ -6,16 +6,22 @@ import type * as Leaflet from 'leaflet';
 export const escHtml = (s: string) =>
   s.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
 
+export const DARK_TILES = 'invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.4)';
+
 // A dark map: OpenStreetMap's own tiles (free, no key; CARTO's now ask for one), darkened
 // by the client-map-tiles CSS filter in globals.css. The container needs the client-map
 // class for the popup and control styling.
 export function createDarkMap(L: typeof Leaflet, el: HTMLElement, opts: Leaflet.MapOptions = {}): Leaflet.Map {
   const m = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: true, ...opts });
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     className: 'client-map-tiles',
     maxZoom: 19,
   }).addTo(m);
+  // Set on the element as well as in globals.css, so the map is dark even when a stale
+  // stylesheet is served (the dev server kept an old globals.css once).
+  const pane = tiles.getContainer();
+  if (pane) pane.style.filter = DARK_TILES;
   return m;
 }
 

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import type { Map as LeafletMap } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ArrowDown, ArrowUp, ExternalLink, Loader2, ScanSearch, Trash2, AlertTriangle } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ExternalLink, Loader2, ScanSearch, Trash2, AlertTriangle } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
 import {
   TREATMENT_PRESETS, RADIUS_OPTIONS, SCAN_CREDITS_MAX, headline,
@@ -37,6 +37,7 @@ type ClinicRow = {
   lat: number | null;
   lng: number | null;
   headline: number | null;
+  compared: CompetitorPrice | null;   // the price the clinic is compared on
   prices: CompetitorPrice[];
 };
 type SortKey = 'price' | 'distance' | 'clinic';
@@ -157,9 +158,9 @@ export function CompetitorsView({ scans, ready, scan, clients, client, since, un
         </p>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[300px_1fr]">
+      <div className="grid gap-6 xl:grid-cols-[260px_minmax(0,1fr)]">
         {/* Saved scans */}
-        <aside className="h-fit rounded-2xl border border-border bg-surface">
+        <aside className="h-fit overflow-hidden rounded-2xl border border-border bg-surface">
           <p className="border-b border-border px-4 py-3 text-xs font-semibold uppercase tracking-wide text-fg-dim">
             Saved scans{client ? ` · ${nameOf(client)}` : ''}
           </p>
@@ -208,22 +209,29 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // ─── One scan ────────────────────────────────────────────────────────────────
+// Stacked, full width: summary tiles, the map, then one row per clinic. Each row shows the
+// price it's compared on and what that price is for; the rest of its prices fold out.
 
 function ScanDetail({ scan, clientName, onDelete }: { scan: CompetitorScanDetail; clientName: string; onDelete: () => void }) {
   const clinics = useMemo<ClinicRow[]>(() => {
     const by = new Map<string, CompetitorPrice[]>();
     for (const p of scan.prices) by.set(p.clinic_name, [...(by.get(p.clinic_name) ?? []), p]);
-    return [...by.entries()].map(([clinic, prices]) => ({
-      clinic,
-      website: prices[0].website,
-      source_url: prices[0].source_url,
-      distance: prices[0].distance_miles,
-      postcode: prices[0].postcode,
-      lat: prices[0].lat,
-      lng: prices[0].lng,
-      headline: headline(prices),
-      prices: [...prices].sort((a, b) => (a.price_gbp ?? 0) - (b.price_gbp ?? 0)),
-    }));
+    return [...by.entries()].map(([clinic, prices]) => {
+      const head = headline(prices);
+      const sorted = [...prices].sort((a, b) => (a.price_gbp ?? 0) - (b.price_gbp ?? 0));
+      return {
+        clinic,
+        website: prices[0].website,
+        source_url: prices[0].source_url,
+        distance: prices[0].distance_miles,
+        postcode: prices[0].postcode,
+        lat: prices[0].lat,
+        lng: prices[0].lng,
+        headline: head,
+        compared: prices.find(p => p.is_main && p.price_gbp === head) ?? sorted.find(p => p.price_gbp === head) ?? null,
+        prices: sorted,
+      };
+    });
   }, [scan.prices]);
 
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'price', desc: false });
@@ -239,6 +247,8 @@ function ScanDetail({ scan, clientName, onDelete }: { scan: CompetitorScanDetail
       return sort.desc ? -c : c;
     });
   }, [clinics, sort]);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (c: string) => setOpen(s => { const n = new Set(s); if (n.has(c)) n.delete(c); else n.add(c); return n; });
 
   const heads = clinics.map(c => c.headline).filter((n): n is number => n != null);
   const min = heads.length ? Math.min(...heads) : null;
@@ -249,14 +259,14 @@ function ScanDetail({ scan, clientName, onDelete }: { scan: CompetitorScanDetail
   return (
     <section className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h2 className="text-lg font-semibold text-fg">{scan.treatment} near {clientName}</h2>
           <p className="text-sm text-fg-muted">
             Within {scan.radius_miles} miles of {[scan.town, scan.postcode].filter(Boolean).join(' ')} · scanned {fmtDate(scan.created_at)}
             {scan.created_by ? ` by ${scan.created_by.split('@')[0]}` : ''} · {scan.pages_read} sites read{scan.credits_used != null ? ` · ${scan.credits_used} credits` : ''}
           </p>
         </div>
-        <button onClick={onDelete} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-fg-muted hover:border-red/50 hover:text-red">
+        <button onClick={onDelete} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-fg-muted hover:border-red/50 hover:text-red">
           <Trash2 size={13} /> Delete scan
         </button>
       </div>
@@ -267,7 +277,7 @@ function ScanDetail({ scan, clientName, onDelete }: { scan: CompetitorScanDetail
         </div>
       )}
 
-      <dl className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Tile label="Clinics with prices" value={String(clinics.length)} />
         <Tile label="Lowest" value={formatGBP(min)} />
         <Tile label="Median" value={formatGBP(med)} />
@@ -277,61 +287,89 @@ function ScanDetail({ scan, clientName, onDelete }: { scan: CompetitorScanDetail
           sub={vs == null ? (scan.our_price_gbp == null ? 'Not entered' : undefined) : `${vs > 0 ? '+' : ''}${vs.toFixed(0)}% ${vs > 0 ? 'above' : vs < 0 ? 'below' : 'at'} median`}
           tone={vs == null ? undefined : vs > 10 ? 'red' : vs < -10 ? 'green' : undefined} />
       </dl>
-      <p className="text-xs text-fg-dim">Each clinic counts once, at its standard full-session price (marked &ldquo;compared&rdquo;), or its lowest session price if the page doesn&apos;t make one clear. Prices are read from the clinics&apos; own pages by AI, so check the source before quoting one.</p>
 
       {clinics.length === 0 && scan.status !== 'error' ? (
         <div className="rounded-2xl border border-dashed border-border p-8 text-center text-sm text-fg-muted">
           No {scan.treatment} prices found within {scan.radius_miles} miles. Try a wider radius or a different name for the treatment.
         </div>
       ) : (
-        <div className="grid gap-4 2xl:grid-cols-[1fr_380px]">
-          <div className="overflow-x-auto rounded-2xl border border-border bg-surface">
-            <table className="w-full min-w-[720px] text-sm">
+        <>
+          <CompetitorMap scan={scan} clientName={clientName} clinics={clinics} />
+
+          <div className="overflow-hidden rounded-2xl border border-border bg-surface">
+            <table className="w-full table-fixed text-sm">
+              <colgroup>
+                <col />
+                <col className="w-[34%]" />
+                <col className="w-28" />
+                <col className="w-28" />
+              </colgroup>
               <thead className="border-b border-border text-left text-xs text-fg-muted">
                 <tr>
                   <SortTh k="clinic" sort={sort} sortBy={sortBy}>Clinic</SortTh>
+                  <th className="px-4 py-2.5 font-semibold">Compared on</th>
                   <SortTh k="price" sort={sort} sortBy={sortBy} right>Price</SortTh>
-                  <th className="px-3 py-2.5 font-semibold">All prices found</th>
                   <SortTh k="distance" sort={sort} sortBy={sortBy} right>Distance</SortTh>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {rows.map(r => (
-                  <tr key={r.clinic} className="align-top">
-                    <td className="px-3 py-3">
-                      <p className="font-medium text-fg">{r.clinic}</p>
-                      {r.source_url && (
-                        <a href={r.source_url} target="_blank" rel="noreferrer" className="mt-0.5 inline-flex items-center gap-1 text-xs text-pink hover:underline">
-                          {r.website} <ExternalLink size={11} />
-                        </a>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums text-fg">{formatGBP(r.headline)}</td>
-                    <td className="px-3 py-3">
-                      <ul className="space-y-1 text-xs">
-                        {r.prices.slice(0, 6).map(p => (
-                          <li key={p.id} className="text-fg-muted">
-                            <span className="font-mono text-fg">{p.price_text || formatGBP(p.price_gbp)}</span>
-                            {p.label && <> · {p.label}</>}
-                            {p.is_main && <span className="ml-1 rounded bg-pink/15 px-1 py-px text-[10px] text-pink">compared</span>}
-                            {p.kind && p.kind !== 'single' && <span className="ml-1 rounded bg-surface-hover px-1 py-px text-[10px] text-fg-dim">{KIND_LABEL[p.kind] ?? p.kind}</span>}
-                            {p.notes && <span className="block text-fg-dim">{p.notes}</span>}
-                          </li>
-                        ))}
-                        {r.prices.length > 6 && <li className="text-fg-dim">+{r.prices.length - 6} more on the page</li>}
-                      </ul>
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-right text-xs text-fg-muted">
-                      {r.distance != null ? `${r.distance} mi` : <span className="text-fg-dim">unknown</span>}
-                      {r.postcode && <span className="block text-fg-dim">{r.postcode}</span>}
-                    </td>
-                  </tr>
-                ))}
+                {rows.map(r => {
+                  const isOpen = open.has(r.clinic);
+                  const others = r.prices.filter(p => p !== r.compared);
+                  return (
+                    <tr key={r.clinic} className="align-top">
+                      <td className="px-4 py-3">
+                        <p className="truncate font-medium text-fg" title={r.clinic}>{r.clinic}</p>
+                        {r.source_url && (
+                          <a href={r.source_url} target="_blank" rel="noreferrer" className="mt-0.5 inline-flex max-w-full items-center gap-1 text-xs text-pink hover:underline">
+                            <span className="truncate">{r.website}</span> <ExternalLink size={11} className="shrink-0" />
+                          </a>
+                        )}
+                        {others.length > 0 && (
+                          <>
+                            <button onClick={() => toggle(r.clinic)} className="mt-1.5 flex items-center gap-1 text-xs text-fg-muted hover:text-fg">
+                              <ChevronDown size={13} className={cn('transition-transform', isOpen && 'rotate-180')} />
+                              {isOpen ? 'Hide other prices' : `${others.length} other price${others.length === 1 ? '' : 's'}`}
+                            </button>
+                            {isOpen && (
+                              <ul className="mt-2 space-y-1 border-l border-border pl-3 text-xs">
+                                {others.map(p => (
+                                  <li key={p.id} className="text-fg-muted">
+                                    <span className="font-mono text-fg">{p.price_text || formatGBP(p.price_gbp)}</span>
+                                    {p.label && <> · {p.label}</>}
+                                    {p.kind && p.kind !== 'single' && <span className="ml-1 rounded bg-surface-hover px-1 py-px text-[10px] text-fg-dim">{KIND_LABEL[p.kind] ?? p.kind}</span>}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-fg-muted">
+                        {r.compared ? (
+                          <>
+                            <p className="text-fg">{r.compared.label || '—'}</p>
+                            {r.compared.kind && r.compared.kind !== 'single' && <p className="text-fg-dim">{KIND_LABEL[r.compared.kind] ?? r.compared.kind}</p>}
+                            {r.compared.notes && <p className="mt-0.5 line-clamp-2 text-fg-dim">{r.compared.notes}</p>}
+                          </>
+                        ) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-base font-semibold tabular-nums text-fg">{formatGBP(r.headline)}</td>
+                      <td className="px-4 py-3 text-right text-xs text-fg-muted">
+                        {r.distance != null ? <span className="text-sm text-fg">{r.distance} mi</span> : <span className="text-fg-dim">unknown</span>}
+                        {r.postcode && <span className="block text-fg-dim">{r.postcode}</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          <CompetitorMap scan={scan} clientName={clientName} clinics={clinics} />
-        </div>
+          <p className="text-xs text-fg-dim">
+            Each clinic is compared on its standard full-session price, or its lowest session price if the page doesn&apos;t make one clear.
+            Prices are read from the clinics&apos; own pages by AI, so open the source before quoting one.
+          </p>
+        </>
       )}
     </section>
   );
@@ -353,7 +391,7 @@ function SortTh({ k, sort, sortBy, right = false, children }: {
   const on = sort.key === k;
   const Arrow = sort.desc ? ArrowDown : ArrowUp;
   return (
-    <th className={cn('px-3 py-2.5 font-semibold', right && 'text-right')} aria-sort={on ? (sort.desc ? 'descending' : 'ascending') : 'none'}>
+    <th className={cn('px-4 py-2.5 font-semibold', right && 'text-right')} aria-sort={on ? (sort.desc ? 'descending' : 'ascending') : 'none'}>
       <button onClick={() => sortBy(k)} className={cn('inline-flex items-center gap-1 hover:text-fg', on && 'text-fg', right && 'flex-row-reverse')}>
         {children} {on && <Arrow size={12} />}
       </button>
@@ -362,6 +400,17 @@ function SortTh({ k, sort, sortBy, right = false, children }: {
 }
 
 // ─── Map: our clinic and the competitors around it ───────────────────────────
+// Pins are styled inline (not from globals.css) so they always render: our clinic is a
+// labelled pink pin, each competitor a solid price tag.
+
+const tagStyle = 'position:absolute;left:0;top:0;transform:translate(-50%,-50%);white-space:nowrap;'
+  + 'padding:3px 8px;border-radius:9999px;font:600 12px/1.2 ui-sans-serif,system-ui,sans-serif;'
+  + 'font-variant-numeric:tabular-nums;color:#fff;background:#18191d;border:1.5px solid #9ca3af;'
+  + 'box-shadow:0 2px 10px rgb(0 0 0 / .6);cursor:pointer;';
+const homeStyle = 'position:absolute;left:0;top:0;transform:translate(-50%,-50%);white-space:nowrap;'
+  + 'padding:3px 9px;border-radius:9999px;font:700 12px/1.2 ui-sans-serif,system-ui,sans-serif;'
+  + 'color:#0f1014;background:#f472d0;border:1.5px solid #0f1014;'
+  + 'box-shadow:0 0 0 4px rgb(244 114 208 / .3),0 2px 10px rgb(0 0 0 / .6);';
 
 function CompetitorMap({ scan, clientName, clinics }: { scan: CompetitorScanDetail; clientName: string; clinics: ClinicRow[] }) {
   const el = useRef<HTMLDivElement>(null);
@@ -375,24 +424,22 @@ function CompetitorMap({ scan, clientName, clinics }: { scan: CompetitorScanDeta
       if (cancelled || !el.current || map.current) return;
       const m = createDarkMap(L, el.current, { scrollWheelZoom: false });
       const pts: [number, number][] = [];
+      const tag = (html: string) => L.divIcon({ html, className: '', iconSize: [0, 0], iconAnchor: [0, 0] });
       if (scan.lat != null && scan.lng != null) {
         const home: [number, number] = [scan.lat, scan.lng];
-        L.circle(home, { radius: scan.radius_miles * 1609.34, color: '#f472d0', weight: 1, opacity: 0.4, fillOpacity: 0.04 }).addTo(m);
-        L.marker(home, {
-          icon: L.divIcon({ html: '<div class="comp-pin comp-pin--home"></div>', className: '', iconSize: [16, 16], iconAnchor: [8, 8] }),
-          zIndexOffset: 1000,
-        }).bindPopup(`<div class="client-popup"><div class="name">${esc(clientName)}</div><div class="meta">Our clinic</div></div>`, { closeButton: false }).addTo(m);
+        L.circle(home, { radius: scan.radius_miles * 1609.34, color: '#f472d0', weight: 1, opacity: 0.5, fillOpacity: 0.05, interactive: false }).addTo(m);
+        L.marker(home, { icon: tag(`<div style="${homeStyle}">${esc(clientName)}</div>`), zIndexOffset: 1000, title: clientName }).addTo(m);
         pts.push(home);
       }
       const at = spreadPoints(placed, c => c.clinic);
       for (const c of placed) {
         const pos = at.get(c.clinic) ?? [c.lat, c.lng];
-        L.marker(pos, {
-          icon: L.divIcon({ html: `<div class="comp-pin">${esc(formatGBP(c.headline))}</div>`, className: '', iconSize: [0, 0], iconAnchor: [0, 0] }),
-        }).bindPopup(`<div class="client-popup"><div class="name">${esc(c.clinic)}</div><div class="addr">${esc(c.postcode ?? '')}${c.distance != null ? ` · ${c.distance} mi` : ''}</div>${c.source_url ? `<div class="links"><a href="${esc(c.source_url)}" target="_blank" rel="noreferrer">Price page ↗</a></div>` : ''}</div>`, { closeButton: false }).addTo(m);
+        L.marker(pos, { icon: tag(`<div style="${tagStyle}">${esc(formatGBP(c.headline))}</div>`), title: `${c.clinic} · ${formatGBP(c.headline)}`, riseOnHover: true })
+          .bindPopup(`<div class="client-popup"><div class="name">${esc(c.clinic)}</div><div class="addr">${esc(formatGBP(c.headline))}${c.compared?.label ? ` · ${esc(c.compared.label)}` : ''}</div><div class="meta">${esc(c.postcode ?? '')}${c.distance != null ? ` · ${c.distance} mi` : ''}</div>${c.source_url ? `<div class="links"><a href="${esc(c.source_url)}" target="_blank" rel="noreferrer">Price page ↗</a></div>` : ''}</div>`, { closeButton: false })
+          .addTo(m);
         pts.push(pos);
       }
-      if (pts.length > 1) m.fitBounds(pts, { padding: [30, 30], maxZoom: 13 });
+      if (pts.length > 1) m.fitBounds(pts, { padding: [50, 70], maxZoom: 14 });
       else if (pts.length === 1) m.setView(pts[0], 12);
       else m.setView([54, -2.5], 6);
       map.current = m;
@@ -401,12 +448,12 @@ function CompetitorMap({ scan, clientName, clinics }: { scan: CompetitorScanDeta
   }, [scan, clientName, placed]);
 
   return (
-    <div className="space-y-1.5">
-      <div className="h-[380px] overflow-hidden rounded-2xl border border-border">
+    <div>
+      <div className="h-[360px] overflow-hidden rounded-2xl border border-border">
         <div ref={el} className="client-map h-full w-full bg-surface" />
       </div>
       {clinics.length > placed.length && (
-        <p className="text-xs text-fg-dim">{clinics.length - placed.length} clinic{clinics.length - placed.length === 1 ? '' : 's'} not on the map (no postcode on the page).</p>
+        <p className="mt-1.5 text-xs text-fg-dim">{clinics.length - placed.length} clinic{clinics.length - placed.length === 1 ? '' : 's'} not on the map (no postcode on the page).</p>
       )}
     </div>
   );
