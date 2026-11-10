@@ -19,7 +19,7 @@ import { cn, formatGBP } from '@/lib/utils';
 
 // ─── Competitors ─────────────────────────────────────────────────────────────
 // Scan what clinics near one of our clients charge for a treatment (Firecrawl, on demand,
-// ~42 credits a scan), then compare: min / median / max against our price, every price
+// ~44 credits a scan), then compare: min / median / max against our price, every price
 // found with its source page, and the clinics on a map around ours. Scans are saved;
 // the sidebar's client list narrows the list to one client.
 

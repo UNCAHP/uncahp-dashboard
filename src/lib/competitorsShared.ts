@@ -1,7 +1,7 @@
 // Competitors: the parts the browser needs too (no server imports). See ./competitors.
 
 export const MAX_PAGES = 8;
-export const SEARCH_CREDITS = 2;
+export const SEARCH_CREDITS = 4; // up to 15 results
 export const PAGE_CREDITS = 5; // 1 to scrape + 4 for JSON extraction
 export const SCAN_CREDITS_MAX = SEARCH_CREDITS + MAX_PAGES * PAGE_CREDITS;
 

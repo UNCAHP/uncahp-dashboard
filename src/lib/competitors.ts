@@ -9,9 +9,10 @@ export * from './competitorsShared';
 
 // ─── Competitors: what clinics near a client charge for a treatment ──────────
 // On demand only — each scan spends Firecrawl credits (FIRECRAWL_API_KEY):
-//   1. SEARCH  "<treatment> price <town>" in the UK (2 credits for up to 10 results).
-//   2. FILTER  the client's own site, duplicate domains and sites that aren't clinics
-//              (directories, news, forums) are dropped before anything is paid for.
+//   1. SEARCH  "<treatment> price <town>" in the UK (4 credits for up to 15 results).
+//   2. FILTER  the client's own site, duplicate domains, sites that aren't clinics
+//              (directories, news, forums) and articles (blogs, cost guides) are dropped
+//              before anything is paid for.
 //   3. READ    each remaining page with Firecrawl's JSON extraction (5 credits a page):
 //              the clinic's name, postcode and its prices for this treatment only.
 //   4. PLACE   each clinic by postcode (postcodes.io) and drop those outside the radius.
@@ -19,7 +20,7 @@ export * from './competitorsShared';
 // paid for once.
 
 const FC = 'https://api.firecrawl.dev/v2';
-const SEARCH_LIMIT = 10;
+const SEARCH_LIMIT = 15;
 // Sites that list or review clinics rather than being one. Booking marketplaces
 // (Treatwell, Fresha) stay in: their pages carry a real clinic's real prices.
 const NOT_A_CLINIC = [
@@ -31,6 +32,11 @@ const NOT_A_CLINIC = [
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+// Articles about a treatment ("how much does CO2 cost", "2026 price guide", blog posts)
+// rank well for price searches but aren't one clinic's prices. Skipping them by URL before
+// reading saves their 5 credits for real clinic pages.
+const ARTICLE_URL = /\/(blog|blogs|news|articles?|journal|insights|guides?|faqs?|magazine)\/|\/20\d\d\/\d\d\/|cost-guide|price-guide|how-much|-vs-|best-.*-clinics?/i;
 
 const domainOf = (u: string): string => {
   try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; }
@@ -154,6 +160,7 @@ export async function runCompetitorScan(input: ScanInput): Promise<{ id: string 
       if (!d || seen.has(d)) return false;
       if (ownDomain && (d === ownDomain || d.endsWith(`.${ownDomain}`))) return false;
       if (NOT_A_CLINIC.some(n => d.includes(n))) return false;
+      if (ARTICLE_URL.test(h.url)) return false;
       seen.add(d);
       return true;
     }).slice(0, MAX_PAGES);
