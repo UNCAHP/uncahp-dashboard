@@ -89,9 +89,11 @@ export function ClientMapView({ data, since, until }: { data: ClientMapData; sin
       const L = (await import('leaflet')).default;
       if (cancelled || !el.current || map.current) return;
       const m = L.map(el.current, { zoomControl: true, attributionControl: true, scrollWheelZoom: true });
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
+      // OpenStreetMap's own tiles: free, no key (CARTO's now ask for one). They're light, so
+      // the client-map-tiles class darkens them with a CSS filter to match the dashboard.
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        className: 'client-map-tiles',
         maxZoom: 19,
       }).addTo(m);
       const at = spread(data.pins);
