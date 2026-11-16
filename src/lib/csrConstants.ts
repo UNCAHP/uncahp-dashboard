@@ -30,6 +30,7 @@ export const hasRefTag = (tags: unknown): boolean =>
 // everywhere else (opt-ins, funnels); only Speed to Lead skips it. Note why on each line.
 export const SPEED_EXCLUDED_LEADS: Record<string, string> = {
   WILQApbs6CHxwvQQZmOG: 'Skin and Heal, julia f, 2026-11-04 11:59: slipped through, taken out on request',
+  '0BPIbXhFGgh9sZQC1qoV': 'Sciene London, ben hodgson, 2026-11-13 17:28: invalid number (+4475546623), taken out on request',
 };
 
 // Confirmed bookings + Phone booking ratio on the CSR scorecard. These no longer come from
