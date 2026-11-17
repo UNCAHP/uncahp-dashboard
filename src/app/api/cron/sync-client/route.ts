@@ -1,6 +1,7 @@
 import { syncClientMeta, type MetaSyncResult } from '@/lib/metaSync';
 import { syncClientGhl, type GhlSyncResult } from '@/lib/ghlSync';
 import { syncClientCalls, callsWindowDays, type CallsSyncResult } from '@/lib/callsSync';
+import { markClientStarted, markClientFinished } from '@/lib/syncStatus';
 
 // Syncs ONE client's Meta ads + GHL contacts/transactions + recent calls — all together.
 // Invoked (fanned out) by the daily dispatcher, one invocation per client, so each gets
@@ -19,8 +20,12 @@ export async function GET(req: Request) {
   if (!secret || req.headers.get('authorization') !== `Bearer ${secret}`) {
     return new Response('Unauthorized', { status: 401 });
   }
-  const loc = new URL(req.url).searchParams.get('loc');
+  const params = new URL(req.url).searchParams;
+  const loc = params.get('loc');
   if (!loc) return Response.json({ ok: false, error: 'missing loc' }, { status: 400 });
+  // Part of a daily run: tell the dashboard this client is syncing (see lib/syncStatus).
+  const runId = params.get('run');
+  await markClientStarted(runId, loc, params.get('name'));
 
   const [meta, ghl, calls] = await Promise.all([
     syncClientMeta(loc).catch((e): MetaSyncResult => ({ ok: false, error: e instanceof Error ? e.message : 'meta error' })),
@@ -28,5 +33,8 @@ export async function GET(req: Request) {
     callsWindowDays(loc, CALLS_WINDOW_DAYS).then(days => syncClientCalls(loc, days)).catch((e): CallsSyncResult => ({ ok: false, error: e instanceof Error ? e.message : 'calls error' })),
   ]);
 
-  return Response.json({ ok: meta.ok || ghl.ok || calls.ok, meta, ghl, calls });
+  const ok = meta.ok || ghl.ok || calls.ok;
+  const errs = [meta, ghl, calls].map(r => (r.ok ? null : r.error)).filter(Boolean).join(' · ') || null;
+  await markClientFinished(runId, loc, ok, errs);
+  return Response.json({ ok, meta, ghl, calls });
 }

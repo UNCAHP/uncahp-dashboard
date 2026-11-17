@@ -46,6 +46,7 @@ import { getClientSpeed, getClientSpeedRows, getSetterScorecard, evaluateLeads }
 import { setterClients, CSR_SETTERS, CSR_MANAGES, TEAM_SPEED_EXCLUDES } from '@/lib/csrConstants';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
+import { getSyncStatus } from '@/lib/syncStatus';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -153,7 +154,8 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
   const funnelClientId = view === 'funnel' ? clientFilter : undefined;
   const callsClient = view === 'calls' ? clientFilter : undefined;
 
-  const [{ rows, totals, freshness }, campaigns, adminClients, adminFunnels, splitTests] = await Promise.all([
+  const [syncStatus, { rows, totals, freshness }, campaigns, adminClients, adminFunnels, splitTests] = await Promise.all([
+    getSyncStatus(),
     getPortfolio(range, scopedClient),
     view === 'client' && scopedClient
       ? getCampaignExplorer(scopedClient, range)
@@ -316,6 +318,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
         title={titles[view].title}
         subtitle={titles[view].subtitle}
         freshness={freshness}
+        syncStatus={syncStatus}
         since={range.since}
         until={range.until}
         view={view}

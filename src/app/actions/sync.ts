@@ -1,6 +1,7 @@
 'use server';
 
-import { requirePage } from '@/lib/auth';
+import { requirePage, requireUser } from '@/lib/auth';
+import { getSyncStatus, type SyncStatus } from '@/lib/syncStatus';
 import { syncSheetBookings } from '@/lib/sheetBookingsSync';
 import { revalidatePath } from 'next/cache';
 import { syncClientMeta, type MetaSyncResult } from '@/lib/metaSync';
@@ -48,4 +49,11 @@ export async function syncSheetAction(): Promise<{ ok: boolean; error?: string; 
   if (!res.ok) return { ok: false, error: res.error };
   revalidatePath('/');
   return { ok: true, tabs: 'tabsMatched' in res ? res.tabsMatched : undefined };
+}
+
+// Polled by the top bar while the daily sync runs (and now and then otherwise), so the
+// page can show progress and refresh itself when the sync finishes.
+export async function syncStatusAction(): Promise<SyncStatus> {
+  await requireUser();
+  return getSyncStatus();
 }

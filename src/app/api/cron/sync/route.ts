@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase';
+import { startSyncRun } from '@/lib/syncStatus';
 
 // Daily sync dispatcher (Vercel Cron). It doesn't do the work itself — it fans out one
 // /api/cron/sync-client invocation PER client, in parallel. Each client sync (Meta ads +
@@ -29,6 +30,10 @@ export async function GET(req: Request) {
     .eq('is_active', true);
   const locs = (keys ?? []).map(k => ({ id: k.location_id as string, name: (k.location_name as string) ?? (k.location_id as string) }));
 
+  // Recorded so the dashboard can show "Syncing n/N clients" until every client is done.
+  const runId = await startSyncRun(locs.length);
+  const runParam = runId ? `&run=${runId}&name=` : '';
+
   // Each fetch spins up a SEPARATE sync-client invocation with its own 300s budget. We
   // trigger them all, then wait only a short window — NOT for every client to finish.
   // Awaiting all of them made the dispatcher block for the full sync and blow past its own
@@ -37,7 +42,7 @@ export async function GET(req: Request) {
   // the window still finish and write their data in the background.
   const TRIGGER_MS = 60_000;
   const settled = await Promise.allSettled(locs.map(l =>
-    fetch(`${origin}/api/cron/sync-client?loc=${encodeURIComponent(l.id)}`, {
+    fetch(`${origin}/api/cron/sync-client?loc=${encodeURIComponent(l.id)}${runParam && runParam + encodeURIComponent(l.name)}`, {
       headers: authHeaders,
       signal: AbortSignal.timeout(TRIGGER_MS),
     }).then(async r => {

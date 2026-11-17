@@ -97,12 +97,15 @@ function readCreative(c: Creative | undefined) {
 
 async function liveAds(account: string, token: string): Promise<{ ads: MetaAd[]; error?: string }> {
   const acct = 'act_' + account.replace(/^act_/, '');
-  const status = encodeURIComponent('["ACTIVE"]');
+  // IN_PROCESS too: Meta puts every ad in an ad set into IN_PROCESS for a while after the
+  // ad set is edited (a budget change, say). Those ads are still running, but asking for
+  // ACTIVE only made a client with freshly edited ad sets show "no live offers".
+  const status = encodeURIComponent('["ACTIVE","IN_PROCESS"]');
   let url: string | null = `${GRAPH}/${acct}/ads?fields=${encodeURIComponent(AD_FIELDS)}&effective_status=${status}&limit=100&access_token=${token}`;
   const ads: MetaAd[] = [];
   for (let page = 0; url && page < 10; page++) {
     // Cached briefly so flipping between pages doesn't refetch every account.
-    const res: Response = await fetch(url, { next: { revalidate: 900 } });
+    const res: Response = await fetch(url, { next: { revalidate: 300 } });
     const j: { data?: MetaAd[]; error?: { message?: string }; paging?: { next?: string } } = await res.json();
     if (j.error) return { ads, error: j.error.message ?? 'Meta API error' };
     ads.push(...(j.data ?? []));
