@@ -117,7 +117,8 @@ async function liveAds(account: string, token: string): Promise<{ ads: MetaAd[];
 const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))];
 
 // clientId narrows it to one client, so only that ad account is read from Meta.
-export async function getActiveOffers(range: DateRange, clientId?: string): Promise<OffersResult> {
+// only, when given, limits it to those clients (CSRs don't see self-booking clients).
+export async function getActiveOffers(range: DateRange, clientId?: string, only?: Set<string>): Promise<OffersResult> {
   const token = process.env.META_ACCESS_TOKEN;
   let clientsQ = supabaseAdmin
     .from('clients')
@@ -130,7 +131,8 @@ export async function getActiveOffers(range: DateRange, clientId?: string): Prom
   if (error) throw error;
   if (!token) return { offers: [], errors: [{ clientId: '', message: 'META_ACCESS_TOKEN is not set on the server.' }] };
 
-  const accounts = (clients ?? []) as { ghl_location_id: string; meta_ad_account_id: string }[];
+  const accounts = ((clients ?? []) as { ghl_location_id: string; meta_ad_account_id: string }[])
+    .filter(a => !only || only.has(a.ghl_location_id));
   const recentSince = new Date(Date.now() - RECENT_DAYS * 86_400_000).toISOString().slice(0, 10);
   const [live, stats, recent, campaigns, funnels] = await Promise.all([
     Promise.all(accounts.map(async a => ({ clientId: a.ghl_location_id, ...(await liveAds(String(a.meta_ad_account_id), token)) }))),

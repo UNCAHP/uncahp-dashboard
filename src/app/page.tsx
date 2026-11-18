@@ -114,7 +114,14 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   }
 
   const scopedClient = view === 'client' || view === 'offers' || view === 'competitors' ? (params.client?.trim() || undefined) : undefined;
-  const clients = await getClientList();
+  // CSRs on Offers: leave out self-booking clients (no setter), whose leads never reach
+  // a CSR, so their offers are noise there. Admins and other roles still see every client.
+  const allClients = await getClientList();
+  const hideSelfBooking = view === 'offers' && scope !== undefined;
+  const clients = hideSelfBooking ? allClients.filter(c => c.csr_key) : allClients;
+  if (hideSelfBooking && scopedClient && !clients.some(c => c.client_id === scopedClient)) {
+    reroute({ view: 'offers', since: params.since, until: params.until });
+  }
   return (
     <div className="flex min-h-screen bg-bg text-fg">
       <Sidebar view={view} selectedClient={scopedClient} since={range.since} until={range.until} clients={clients}
@@ -280,7 +287,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
 
   // Offers: every campaign live in a client's Meta ad account, read from Meta on load.
   const offersClient = view === 'offers' ? clientFilter : undefined;
-  const offersData = view === 'offers' ? await getActiveOffers(range, offersClient) : null;
+  const offersData = view === 'offers' ? await getActiveOffers(range, offersClient, csrScope(user) !== undefined ? new Set(clients.map(c => c.client_id)) : undefined) : null;
 
   // Client Map: every active clinic, placed from the address on its GHL sub-account.
   const mapData = view === 'map' ? await getClientMap() : null;
