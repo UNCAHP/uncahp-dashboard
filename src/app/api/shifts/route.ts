@@ -18,14 +18,19 @@ import { supabaseAdmin } from '@/lib/supabase';
 // for that day; send [] to clear them. Break times parse like shift times.
 //
 // Times are London local. Accepted forms: "8", "8:30", "8.30", "08:30", "6pm", "6:30pm".
-// An end hour ≤ 12 with no am/pm is read as afternoon ("8-6" ⇒ 08:00–18:00), and a start
-// hour of 1–6 with no am/pm too ("1-7pm" ⇒ 13:00–19:00 — nobody starts at 1am).
+// An end with no am/pm is the first such time after the start ("8-6" ⇒ 08:00–18:00,
+// "10:30-11:30" ⇒ 10:30–11:30), and a start hour of 1–6 with no am/pm is afternoon
+// ("1-7pm" ⇒ 13:00–19:00 — nobody starts at 1am).
 
 export const dynamic = 'force-dynamic';
 
 type Row = { date: string; csr_name: string; shift_start?: string | null; shift_end?: string | null; off?: boolean; breaks?: unknown };
 
-function parseTime(raw: unknown, assumePm: boolean): string | null {
+// after: the start time when parsing an end time. An end with no am/pm is read as the first
+// time after that start ("8-6" ⇒ 18:00, "2-3" lunch ⇒ 15:00, "10:30-11:30" ⇒ 11:30). It used
+// to be pushed into the afternoon whenever the hour was ≤ 12, which turned a 10:30–11:30
+// break into 10:30–23:30 and took a whole afternoon out of Speed to Lead.
+function parseTime(raw: unknown, after?: string | null): string | null {
   if (raw == null) return null;
   const s = String(raw).trim().toLowerCase();
   if (!s) return null;
@@ -35,11 +40,13 @@ function parseTime(raw: unknown, assumePm: boolean): string | null {
   const min = Number(m[2] ?? '0');
   const ap = m[3];
   if (h > 23 || min > 59) return null;
+  const fmt = (hh: number) => `${String(hh).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
   if (ap === 'pm' && h < 12) h += 12;
   else if (ap === 'am' && h === 12) h = 0;
-  else if (!ap && assumePm && h <= 12 && h !== 12) h += 12;
-  else if (!ap && !assumePm && h >= 1 && h <= 6) h += 12;
-  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+  else if (!ap && after !== undefined) {
+    if (after && fmt(h) <= after && h < 12) h += 12;
+  } else if (!ap && h >= 1 && h <= 6) h += 12;   // a start of 1–6 is afternoon: nobody starts at 1am
+  return fmt(h);
 }
 
 function parseRow(r: unknown): { row: Record<string, unknown> } | { error: string } {
@@ -54,8 +61,8 @@ function parseRow(r: unknown): { row: Record<string, unknown> } | { error: strin
   const off = x.off === true || /^(not in|off)$/i.test(String(x.shift_start ?? '').trim());
   let shift_start: string | null = null, shift_end: string | null = null;
   if (!off) {
-    shift_start = parseTime(x.shift_start, false);
-    shift_end = parseTime(x.shift_end, true);
+    shift_start = parseTime(x.shift_start);
+    shift_end = parseTime(x.shift_end, shift_start);
     if (!shift_start || !shift_end) return { error: `bad times "${x.shift_start}"–"${x.shift_end}" for ${csr_name} on ${date}` };
     if (shift_end <= shift_start) return { error: `shift ends before it starts (${shift_start}–${shift_end}) for ${csr_name} on ${date}` };
   }
@@ -64,7 +71,7 @@ function parseRow(r: unknown): { row: Record<string, unknown> } | { error: strin
     if (!Array.isArray(x.breaks)) return { error: `breaks must be a list for ${csr_name} on ${date}` };
     const breaks: { start: string; end: string }[] = [];
     for (const b of x.breaks as { start?: unknown; end?: unknown }[]) {
-      const start = parseTime(b?.start, false), end = parseTime(b?.end, true);
+      const start = parseTime(b?.start), end = parseTime(b?.end, start);
       if (!start || !end || end <= start) return { error: `bad break "${b?.start}"–"${b?.end}" for ${csr_name} on ${date}` };
       breaks.push({ start, end });
     }
