@@ -12,6 +12,8 @@ import { supabaseAdmin } from '@/lib/supabase';
 //     { "date": "2026-09-28", "csr_name": "Alexis", "off": true }
 //     { "date": "2026-10-26", "csr_name": "Maddie", "shift_start": "9", "shift_end": "6",
 //       "breaks": [{ "start": "1", "end": "2pm" }] }
+//     { "date": "2026-11-19", "csr_name": "Maddie", "breaks": [{ "start": "2", "end": "3" }] }
+//       ↑ breaks only (a lunch reported mid-day): updates that day's stored shift
 //
 // "breaks" (lunch etc.) is optional: leads arriving while the account's setter is on a
 // break aren't measured for Speed to Lead. Leave it out to keep the breaks already stored
@@ -59,8 +61,11 @@ function parseRow(r: unknown): { row: Record<string, unknown> } | { error: strin
   const csr_key = csr_name.split(/\s+/)[0].toLowerCase();
 
   const off = x.off === true || /^(not in|off)$/i.test(String(x.shift_start ?? '').trim());
+  // A lunch reported mid-day ("my lunch is 2-3") comes as breaks only, with no hours: it
+  // updates the breaks on the day's shift that's already stored.
+  const breaksOnly = !off && x.breaks !== undefined && x.shift_start == null && x.shift_end == null;
   let shift_start: string | null = null, shift_end: string | null = null;
-  if (!off) {
+  if (!off && !breaksOnly) {
     shift_start = parseTime(x.shift_start);
     shift_end = parseTime(x.shift_end, shift_start);
     if (!shift_start || !shift_end) return { error: `bad times "${x.shift_start}"–"${x.shift_end}" for ${csr_name} on ${date}` };
@@ -77,6 +82,7 @@ function parseRow(r: unknown): { row: Record<string, unknown> } | { error: strin
     }
     row.breaks = off ? [] : breaks;
   }
+  if (breaksOnly) return { row: { shift_date: date, csr_key, breaks: row.breaks, breaksOnly: true } };
   return { row };
 }
 
@@ -100,13 +106,26 @@ export async function POST(req: Request) {
   });
   if (rows.length === 0) return Response.json({ ok: false, error: 'no valid rows', errors }, { status: 400 });
 
+  // Breaks-only rows update the day's stored shift; they can't create one (no hours).
+  let missing = 0;
+  for (const r of rows.filter(r => r.breaksOnly)) {
+    const { data, error } = await supabaseAdmin.from('csr_shifts')
+      .update({ breaks: r.breaks }).eq('csr_key', r.csr_key as string).eq('shift_date', r.shift_date as string).select('csr_key');
+    if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
+    if (!data?.length) {
+      missing++;
+      errors.push(`no shift stored for ${r.csr_key} on ${r.shift_date} yet: send the day's hours with the breaks`);
+    }
+  }
+  const full = rows.filter(r => !r.breaksOnly);
+
   // Rows with and without "breaks" go separately, so a row that leaves breaks out keeps
   // the ones already stored rather than having them blanked.
-  for (const batch of [rows.filter(r => 'breaks' in r), rows.filter(r => !('breaks' in r))]) {
+  for (const batch of [full.filter(r => 'breaks' in r), full.filter(r => !('breaks' in r))]) {
     if (batch.length === 0) continue;
     const { error } = await supabaseAdmin.from('csr_shifts').upsert(batch, { onConflict: 'csr_key,shift_date' });
     if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  return Response.json({ ok: true, written: rows.length, rejected: errors.length, errors });
+  return Response.json({ ok: true, written: rows.length - missing, rejected: errors.length, errors });
 }
