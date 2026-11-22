@@ -1,5 +1,12 @@
 {
   "crons": [
-    { "path": "/api/cron/sync", "schedule": "0 6 * * *" }
+    {
+      "path": "/api/cron/sync",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/notion",
+      "schedule": "15 7-19/3 * * *"
+    }
   ]
 }

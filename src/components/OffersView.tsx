@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import {
-  ExternalLink, Play, Search, Megaphone, LayoutGrid, Rows3, ArrowDown, ArrowUp, Copy, X, ChevronRight,
+  ExternalLink, Play, Search, Megaphone, LayoutGrid, Rows3, ArrowDown, ArrowUp, Copy, X, ChevronRight, RefreshCw,
 } from 'lucide-react';
+import { syncNotionAction } from '@/app/actions/sync';
 import type { ClientOption } from '@/lib/queries';
 import type { Offer, OffersResult } from '@/lib/offers';
 import type { FunnelPageLink } from '@/lib/funnelAdmin';
@@ -45,9 +46,17 @@ function copy(text: string, what: string) {
   );
 }
 
-export function OffersView({ data, clients, client, rangeLabel, since, until }: {
-  data: OffersResult; clients: ClientOption[]; client: string | null; rangeLabel: string; since: string; until: string;
+export function OffersView({ data, clients, client, rangeLabel, since, until, canSyncNotion = false }: {
+  data: OffersResult; clients: ClientOption[]; client: string | null; rangeLabel: string; since: string; until: string; canSyncNotion?: boolean;
 }) {
+  const [notionBusy, startNotion] = useTransition();
+  const syncNotion = () => startNotion(async () => {
+    const r = await syncNotionAction();
+    if (!r.ok) { toast.error(`Notion sync failed: ${r.error}`); return; }
+    toast.success(`Synced to Notion: ${r.created} new, ${r.updated} updated, ${r.ended} ended`, {
+      action: r.databaseUrl ? { label: 'Open', onClick: () => window.open(r.databaseUrl, '_blank', 'noopener') } : undefined,
+    });
+  });
   const [q, setQ] = useState('');
   const [dest, setDest] = useState<Dest>('all');
   const [layout, setLayoutState] = useState<Layout>('cards');
@@ -137,7 +146,14 @@ export function OffersView({ data, clients, client, rangeLabel, since, until }: 
           </label>
           <Segmented value={dest} onChange={setDest} label="Where the ads go"
             options={[['all', 'All'], ['page', 'Landing page'], ['form', 'Instant form']]} />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            {canSyncNotion && (
+              <button onClick={syncNotion} disabled={notionBusy} title="Push every live offer to the Live Offers database in Notion now (it also syncs every 3 hours)"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted transition-colors hover:border-border-strong hover:text-fg disabled:opacity-60">
+                <RefreshCw size={13} className={cn(notionBusy && 'animate-spin')} />
+                {notionBusy ? 'Syncing to Notion…' : 'Sync to Notion'}
+              </button>
+            )}
             <Segmented value={layout} onChange={setLayout} label="Layout"
               options={[['cards', 'Cards', LayoutGrid], ['table', 'Table', Rows3]]} />
           </div>

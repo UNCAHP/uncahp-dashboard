@@ -358,7 +358,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
             until={range.until}
           />
         )}
-        {view === 'offers' && offersData && <OffersView data={offersData} clients={clients} client={offersClient ?? null} rangeLabel={range.label} since={range.since} until={range.until} />}
+        {view === 'offers' && offersData && <OffersView data={offersData} clients={clients} client={offersClient ?? null} rangeLabel={range.label} since={range.since} until={range.until} canSyncNotion={user.isAdmin} />}
         {view === 'competitors' && compList && (
           <CompetitorsView scans={compList.scans} ready={compList.ready} scan={compScan} clients={clients} client={compClient ?? null} since={range.since} until={range.until} />
         )}

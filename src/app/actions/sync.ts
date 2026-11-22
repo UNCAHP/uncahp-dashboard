@@ -2,6 +2,7 @@
 
 import { requirePage, requireUser } from '@/lib/auth';
 import { getSyncStatus, type SyncStatus } from '@/lib/syncStatus';
+import { syncOffersToNotion, type NotionSyncResult } from '@/lib/notionSync';
 import { syncSheetBookings } from '@/lib/sheetBookingsSync';
 import { revalidatePath } from 'next/cache';
 import { syncClientMeta, type MetaSyncResult } from '@/lib/metaSync';
@@ -56,4 +57,12 @@ export async function syncSheetAction(): Promise<{ ok: boolean; error?: string; 
 export async function syncStatusAction(): Promise<SyncStatus> {
   await requireUser();
   return getSyncStatus();
+}
+
+// "Sync to Notion" on the Offers page (admins): push live offers to Notion now instead of
+// waiting for the next scheduled run.
+export async function syncNotionAction(): Promise<NotionSyncResult> {
+  const user = await requirePage('offers');
+  if (!user.isAdmin) return { ok: false, created: 0, updated: 0, ended: 0, error: 'Admins only.' };
+  return syncOffersToNotion();
 }
