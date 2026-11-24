@@ -1,4 +1,5 @@
 import { supabaseAdmin } from './supabase';
+import { replaceRows } from './replaceRows';
 
 // Direct GHL → Supabase sync for a single client, using that client's Private
 // Integration Token (pit-…) stored in ghl_api_keys. Mirrors what the external pipeline
@@ -90,12 +91,9 @@ export async function syncClientGhl(locationId: string): Promise<GhlSyncResult> 
   }));
 
   // Full pull succeeded → safe to replace this client's contacts.
-  const { error: delC } = await supabaseAdmin.from('ghl_contacts').delete().eq('location_id', locationId);
-  if (delC) return { ok: false, error: `Clearing contacts failed: ${delC.message}` };
-  for (let i = 0; i < contactRows.length; i += 500) {
-    const { error } = await supabaseAdmin.from('ghl_contacts').insert(contactRows.slice(i, i + 500));
-    if (error) return { ok: false, error: `Writing contacts failed: ${error.message}` };
-  }
+  // Old rows are put back if the new ones can't be written (see replaceRows).
+  const { error: repC } = await replaceRows('ghl_contacts', [{ column: 'location_id', op: 'eq', value: locationId }], contactRows);
+  if (repC) return { ok: false, error: repC };
 
   // ── Transactions: offset pagination, best-effort (payments scope may be off) ──
   const txns: GhlTxn[] = [];
@@ -135,15 +133,8 @@ export async function syncClientGhl(locationId: string): Promise<GhlSyncResult> 
       metadata: { liveMode: t.liveMode ?? null, entitySourceSubType: t.entitySourceSubType ?? null },
       _synced_at: now,
     }));
-    const { error: delT } = await supabaseAdmin.from('ghl_transactions').delete().eq('location_id', locationId);
-    if (!delT) {
-      let wrote = true;
-      for (let i = 0; i < txRows.length && wrote; i += 500) {
-        const { error } = await supabaseAdmin.from('ghl_transactions').insert(txRows.slice(i, i + 500));
-        if (error) wrote = false;
-      }
-      if (wrote) txCount = txRows.length;
-    }
+    const { error: repT } = await replaceRows('ghl_transactions', [{ column: 'location_id', op: 'eq', value: locationId }], txRows);
+    if (!repT) txCount = txRows.length;
   }
 
   return { ok: true, contacts: contactRows.length, transactions: txCount };

@@ -1,4 +1,5 @@
 import { supabaseAdmin } from './supabase';
+import { replaceRows } from './replaceRows';
 
 // Direct Meta → Supabase sync for a single client, using the agency system-user token
 // (META_ACCESS_TOKEN). This mirrors what the external pipeline writes into
@@ -111,18 +112,11 @@ export async function syncClientMeta(ghlLocationId: string): Promise<MetaSyncRes
     _synced_at: now,
   }));
 
-  // Replace this client's window: idempotent, and scoped so no other client is touched.
-  const { error: delErr } = await supabaseAdmin
-    .from('meta_daily_stats')
-    .delete()
-    .eq('client_id', client.ghl_location_id)
-    .gte('date', day(since));
-  if (delErr) return { ok: false, error: `Clearing old stats failed: ${delErr.message}` };
-
-  for (let i = 0; i < rows.length; i += 500) {
-    const { error: insErr } = await supabaseAdmin.from('meta_daily_stats').insert(rows.slice(i, i + 500));
-    if (insErr) return { ok: false, error: `Writing stats failed: ${insErr.message}` };
-  }
+  // Replace this client's window: idempotent, scoped so no other client is touched, and
+  // the old rows are put back if the new ones can't be written (see replaceRows).
+  const { error: repErr } = await replaceRows('meta_daily_stats',
+    [{ column: 'client_id', op: 'eq', value: client.ghl_location_id }, { column: 'date', op: 'gte', value: day(since) }], rows);
+  if (repErr) return { ok: false, error: repErr };
 
   // ── Campaigns: powers the funnel campaign-mapping picker + explorer names.
   // Best-effort — a failure here shouldn't fail the whole sync. ──
@@ -141,15 +135,8 @@ export async function syncClientMeta(ghlLocationId: string): Promise<MetaSyncRes
       objective: c.objective ?? null,
       _synced_at: now,
     }));
-    const { error: cDel } = await supabaseAdmin.from('meta_campaigns').delete().eq('client_id', client.ghl_location_id);
-    if (!cDel) {
-      let wrote = true;
-      for (let i = 0; i < campRows.length && wrote; i += 500) {
-        const { error } = await supabaseAdmin.from('meta_campaigns').insert(campRows.slice(i, i + 500));
-        if (error) wrote = false;
-      }
-      if (wrote) campaigns = campRows.length;
-    }
+    const { error: cErr2 } = await replaceRows('meta_campaigns', [{ column: 'client_id', op: 'eq', value: client.ghl_location_id }], campRows);
+    if (!cErr2) campaigns = campRows.length;
   }
 
   const spend_gbp = rows.reduce((s, r) => s + (r.spend_cents || 0), 0) / 100;
