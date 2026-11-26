@@ -43,6 +43,7 @@ import {
 import { getAdminClients } from '@/lib/clientAdmin';
 import { getAdminFunnels } from '@/lib/funnelAdmin';
 import { getClientSpeed, getClientSpeedRows, getSetterScorecard, evaluateLeads } from '@/lib/csrMetrics';
+import { getCallActivity, type CallActivity } from '@/lib/csrCalls';
 import { setterClients, CSR_SETTERS, CSR_MANAGES, TEAM_SPEED_EXCLUDES } from '@/lib/csrConstants';
 import { clientInitials, clientColor } from '@/lib/clientVisuals';
 import { formatGBP, formatNumber, formatPercent } from '@/lib/utils';
@@ -208,12 +209,13 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
   // are measured for Speed to Lead; bookings cover every B2C client.
   const csrKeys = ['team', ...CSR_SETTERS.map(s => s.key)];
   const csrSel: CsrKey | null = csrKeys.includes(params.csr ?? '') ? params.csr! : null;
-  const csrPart: CsrPart | null = csrSel && (params.part === 'bookings' || params.part === 'stl') ? params.part : null;
+  const csrPart: CsrPart | null = csrSel && (params.part === 'bookings' || params.part === 'stl' || params.part === 'calls') ? params.part : null;
   let callsOverview: CallOverviewRow[] = [];
   let callsDetail: CallDetail | null = null;
   let callsSetters: SetterCard[] = [];
   let callsLeads: LeadEval[] = [];
   let csrBookings: BookingsBoard | null = null;
+  let csrCalls: CallActivity = { rows: [], syncedAt: null };
   if (view === 'calls') {
     const measured = setterClients(clients).map(c => ({ client_id: c.client_id, csr: c.csr_key ?? null }));
     const detailClient = callsClient ? clients.find(c => c.client_id === callsClient) : undefined;
@@ -221,16 +223,18 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
       callsDetail = { client: detailClient, speed: await getClientSpeed(detailClient.client_id, range) };
     } else {
       // One evaluation of every lead feeds the team rows, the setter cards and the lead lists.
-      const needsSpeed = csrPart !== 'bookings';
+      const needsSpeed = csrPart !== 'bookings' && csrPart !== 'calls';
       const leads = needsSpeed ? await evaluateLeads(measured, range) : [];
       // The Team view leaves out the leads of setters excluded from the team rate, and their
       // accounts unless a colleague answered leads there while covering.
       const teamLeads = leads.filter(l => !TEAM_SPEED_EXCLUDES.includes(l.responsible));
-      const [allRows, setters, board] = await Promise.all([
+      const [allRows, setters, board, callActivity] = await Promise.all([
         needsSpeed ? getClientSpeedRows(measured, range, teamLeads) : Promise.resolve([]),
         needsSpeed ? getSetterScorecard(measured, range, leads) : Promise.resolve([]),
-        csrPart !== 'stl' ? getBookingsBoard(clients, range.since, range.until) : Promise.resolve(null),
+        csrPart !== 'stl' && csrPart !== 'calls' ? getBookingsBoard(clients, range.since, range.until) : Promise.resolve(null),
+        csrPart === null || csrPart === 'calls' ? getCallActivity(range) : Promise.resolve(csrCalls),
       ]);
+      csrCalls = callActivity;
       const byId = new Map(clients.map(c => [c.client_id, c]));
       const rows = allRows.filter(r => !(r.csr && TEAM_SPEED_EXCLUDES.includes(r.csr) && r.leads + r.selfBooked === 0));
       callsOverview = rows.map(r => ({ client: byId.get(r.client_id)!, row: r })).filter(r => !!r.client);
@@ -372,6 +376,7 @@ async function MainContent({ params, clients, user }: { params: SearchParams; cl
             detail={callsDetail}
             setters={callsSetters}
             leads={callsLeads}
+            calls={csrCalls}
             bookings={csrBookings ?? EMPTY_BOARD(range.until)}
             clients={clients}
             since={range.since}

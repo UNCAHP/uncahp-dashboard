@@ -34,7 +34,7 @@ import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 // Accountability for a lead always goes to the account's assigned setter for that day, and
 // only for leads that arrive during her shift. Nobody is measured on a colleague's accounts.
 
-const CONVERSATION_MIN_SEC = 60;
+export const CONVERSATION_MIN_SEC = 60;
 
 // London-local helpers.
 const londonDate = (iso: string): string => {
@@ -68,7 +68,7 @@ export const offTrackDay = (day: string): boolean => SPEED_WEEKDAYS_ONLY && isWe
 // missing — which made Speed to Lead change from one page load to the next. Order by the
 // date column the query filters on first, so Postgres uses that index rather than walking
 // the primary key (slow enough to hit the statement timeout on big tables).
-async function pageAll<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
+export async function pageAll<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
   const out: T[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await build(from, from + 999);

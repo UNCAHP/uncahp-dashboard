@@ -4,11 +4,12 @@ import { Fragment, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { NavLink } from '@/components/NavProgress';
 import {
-  Loader2, RefreshCw, ArrowLeft, ChevronRight, ChevronDown, ChevronUp, Users, PhoneOutgoing, Moon, CalendarCheck, Zap, ExternalLink,
+  Loader2, RefreshCw, ArrowLeft, ChevronRight, ChevronDown, ChevronUp, Users, PhoneOutgoing, Phone, Moon, CalendarCheck, Zap, ExternalLink,
 } from 'lucide-react';
 import type { ClientOption } from '@/lib/queries';
 import type { ClientSpeed, ClientSpeedRow, SetterCard, ShiftRow, LeadEval } from '@/lib/csrMetrics';
 import type { BookingsBoard, AccountBookings, BookingCount } from '@/lib/csrBookings';
+import type { CallActivity, CallDay } from '@/lib/csrCalls';
 import { SPEED_TO_LEAD_MINUTES, CSR_SETTERS, SPEED_TARGET_PCT, SPEED_TARGET_TEXT, SPEED_WINDOW_TEXT, TEAM_SPEED_EXCLUDES, TEAM_SPEED_EXCLUDED_NAMES, isTrackedSetter } from '@/lib/csrConstants';
 import { syncClientCallsAction, syncSheetAction } from '@/app/actions/sync';
 import { useRouter } from 'next/navigation';
@@ -21,7 +22,7 @@ export type CallOverviewRow = { client: ClientOption; row: ClientSpeedRow };
 export type CallDetail = { client: ClientOption; speed: ClientSpeed };
 // Whose dashboard is open: the whole team, or one setter (lowercased first name).
 export type CsrKey = 'team' | string;
-export type CsrPart = 'bookings' | 'stl';
+export type CsrPart = 'bookings' | 'stl' | 'calls';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -179,7 +180,7 @@ function syncNote(board: BookingsBoard): string {
 // ─── The dashboard ───────────────────────────────────────────────────────────
 
 export function CsrDashboardView({
-  visible, csr, part, overview, detail, setters, leads, bookings, clients, since, until,
+  visible, csr, part, overview, detail, setters, leads, calls, bookings, clients, since, until,
 }: {
   visible: CsrKey[] | null;       // dashboards this user may open; null = all
   csr: CsrKey | null;
@@ -188,6 +189,7 @@ export function CsrDashboardView({
   detail: CallDetail | null;
   setters: SetterCard[];
   leads: LeadEval[];
+  calls: CallActivity;
   bookings: BookingsBoard;
   clients: ClientOption[];
   since: string;
@@ -205,19 +207,21 @@ export function CsrDashboardView({
   const crumbs: { label: string; href: string }[] = [];
   if (csr) crumbs.push({ label: 'CSR Dashboard', href: href({}) });
   if (csr && (part || detail)) crumbs.push({ label: personLabel(csr), href: href({ csr }) });
-  if (csr && part && detail) crumbs.push({ label: part === 'bookings' ? 'Bookings' : 'Speed to Lead', href: href({ csr, part }) });
+  if (csr && part && detail) crumbs.push({ label: part === 'bookings' ? 'Bookings' : part === 'calls' ? 'Calls made' : 'Speed to Lead', href: href({ csr, part }) });
 
   let body: React.ReactNode;
   if (detail) body = <Detail row={detail} />;
-  else if (!csr) body = <Home visible={visible} setters={setters} bookings={bookings} monthName={monthName} href={href} />;
+  else if (!csr) body = <Home visible={visible} setters={setters} calls={calls} bookings={bookings} monthName={monthName} href={href} />;
+  else if (part === 'calls') body = <CallsMade csr={csr} calls={calls} clients={clients} since={since} until={until} />;
   else if (part === 'bookings') body = <BookingsAccounts csr={csr} bookings={bookings} clients={clients} monthName={monthName} />;
   else if (part === 'stl') body = <SpeedAccounts csr={csr} overview={overview} setters={setters} leads={leads} clients={clients} detailHref={id => href({ csr, part, client: id })} />;
-  else body = <Person csr={csr} setters={setters} bookings={bookings} monthName={monthName} href={href} />;
+  else body = <Person csr={csr} setters={setters} calls={calls} bookings={bookings} monthName={monthName} href={href} />;
 
   const heading = detail ? detail.client.client_name
     : !csr ? 'CSR Dashboard'
     : part === 'bookings' ? `${personLabel(csr)} · Bookings`
     : part === 'stl' ? `${personLabel(csr)} · Speed to Lead`
+    : part === 'calls' ? `${personLabel(csr)} · Calls made`
     : personLabel(csr);
 
   return (
@@ -235,7 +239,7 @@ export function CsrDashboardView({
           </nav>
         )}
         {!detail && <h1 className="text-3xl font-bold tracking-tight text-fg">{heading}</h1>}
-        {!csr && !detail && <p className="mt-1 text-sm text-fg-muted">Bookings against target and Speed to Lead, for the team and each setter.</p>}
+        {!csr && !detail && <p className="mt-1 text-sm text-fg-muted">Bookings against target, Speed to Lead and calls made, for the team and each setter.</p>}
       </div>
       {body}
     </div>
@@ -244,9 +248,9 @@ export function CsrDashboardView({
 
 // ─── Home: the team and each setter, one card each ───────────────────────────
 
-function Home({ visible, setters, bookings, monthName, href }: {
+function Home({ visible, setters, calls, bookings, monthName, href }: {
   visible: CsrKey[] | null;
-  setters: SetterCard[]; bookings: BookingsBoard; monthName: string;
+  setters: SetterCard[]; calls: CallActivity; bookings: BookingsBoard; monthName: string;
   href: (n: { csr?: CsrKey | null; part?: CsrPart | null }) => string;
 }) {
   const people: CsrKey[] = ['team', ...CSR_SETTERS.map(s => s.key)].filter(k => !visible || visible.includes(k));
@@ -256,6 +260,7 @@ function Home({ visible, setters, bookings, monthName, href }: {
         const accounts = accountsFor(bookings, key);
         const b = bookingsFor(accounts);
         const s = speedFor(key, setters);
+        const c = callTotals(callsFor(calls, key));
         const hasTarget = b.withTarget > 0;
         return (
           <NavLink key={key} href={href({ csr: key })}
@@ -294,6 +299,16 @@ function Home({ visible, setters, bookings, monthName, href }: {
               </div>
               <OutcomeBar leads={s.leads} attempted={s.attempted} neverCalled={s.never} connected={s.connected} className="mt-3" />
             </div>
+
+            <div className="mt-5 border-t border-border pt-4">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
+                <span className="inline-flex items-center gap-1.5"><Phone size={12} className="text-pink" /> Calls made</span>
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="font-mono text-3xl font-bold tabular-nums text-fg">{formatNumber(c.dials)}</span>
+                <span className="text-xs text-fg-muted">{c.days ? `${num1(c.perDay)} a day · ${c.connected} connected` : 'none in this range'}</span>
+              </div>
+            </div>
           </NavLink>
         );
       })}
@@ -303,8 +318,8 @@ function Home({ visible, setters, bookings, monthName, href }: {
 
 // ─── One person: the two parts, each opening its own breakdown ───────────────
 
-function Person({ csr, setters, bookings, monthName, href }: {
-  csr: CsrKey; setters: SetterCard[]; bookings: BookingsBoard; monthName: string;
+function Person({ csr, setters, calls, bookings, monthName, href }: {
+  csr: CsrKey; setters: SetterCard[]; calls: CallActivity; bookings: BookingsBoard; monthName: string;
   href: (n: { csr?: CsrKey | null; part?: CsrPart | null }) => string;
 }) {
   const accounts = accountsFor(bookings, csr);
@@ -314,6 +329,10 @@ function Person({ csr, setters, bookings, monthName, href }: {
   const monthTrack = trackOf(b.bookedTargeted, b.rangePace, hasTarget);
   const weekTrack = trackOf(b.weekBookedTargeted, b.weekPace, hasTarget);
   const late = Math.max(0, s.leads - s.attempted - s.never);
+  const myCalls = callsFor(calls, csr);
+  const c = callTotals(myCalls);
+  const recent = byDay(myCalls).slice(-10);
+  const peak = Math.max(1, ...recent.map(d => d.dials));
 
   return (
     <div className="grid items-stretch gap-6 xl:grid-cols-2">
@@ -361,7 +380,178 @@ function Person({ csr, setters, bookings, monthName, href }: {
         </dl>
         <p className="mt-auto border-t border-border pt-3 text-xs text-fg-dim">{[SPEED_WINDOW_TEXT, csr === 'team' ? teamSpeedNote : '', selfBookedNote(s.selfBooked)].filter(Boolean).join(' · ')}</p>
       </NavLink>
+
+      <NavLink href={href({ csr, part: 'calls' })} className="group flex flex-col rounded-2xl border border-border bg-surface p-6 transition-colors hover:border-pink/50 xl:col-span-2">
+        <PanelHead icon={Phone} title="Calls made" sub={`${csr === 'team' ? 'Every setter' : 'Every account they dialled'} · per day and per client`} info={CALLS_DEFINITION} />
+        <div className="mt-6 grid items-end gap-x-10 gap-y-5 lg:grid-cols-[auto_1fr]">
+          <dl className="grid grid-cols-3 gap-x-8">
+            <Stat label="Dials" value={c.dials} />
+            <Stat label="Connected" value={c.connected} dot="bg-green" />
+            <div>
+              <dt className="text-[11px] text-fg-muted">A day, on average</dt>
+              <dd className="mt-0.5 font-mono text-2xl font-semibold tabular-nums text-fg">{c.days ? num1(c.perDay) : '—'}</dd>
+            </div>
+          </dl>
+          {recent.length > 0 && (
+            <div className="flex h-16 min-w-0 items-end gap-1.5" aria-label="Dials per day, latest days">
+              {recent.map(d => (
+                <Tooltip key={d.day} always label={`${fmtDay(d.day)}: ${plural(d.dials, 'dial')}, ${d.connected} connected`} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1">
+                  <span className="block w-full max-w-8 rounded-t bg-pink/70 transition-colors group-hover:bg-pink" style={{ height: `${Math.max(4, Math.round((d.dials / peak) * 100))}%` }} />
+                  <span className="text-[10px] tabular-nums text-fg-dim">{Number(d.day.slice(8))}</span>
+                </Tooltip>
+              ))}
+            </div>
+          )}
+        </div>
+        <p className="mt-5 border-t border-border pt-3 text-xs text-fg-dim">{callsSyncNote(calls.syncedAt)}</p>
+      </NavLink>
     </div>
+  );
+}
+
+// ─── Calls made ──────────────────────────────────────────────────────────────
+
+const CALLS_DEFINITION = `Every outbound dial in the GHL call log, credited to the setter who made it, on whichever account it was (not only calls to new leads). Connected = answered and lasted 60s or more, the same bar as Speed to Lead.`;
+const callsSyncNote = (at: string | null) =>
+  at ? `Call log last synced ${fmtShort(at.slice(0, 10))} at ${fmtClock(at)}. Calls made since then appear after the next sync.` : 'The call log has not been synced yet.';
+
+const callsFor = (calls: CallActivity, key: CsrKey): CallDay[] => (key === 'team' ? calls.rows : calls.rows.filter(r => r.csr === key));
+function callTotals(rows: CallDay[]) {
+  const dials = rows.reduce((n, r) => n + r.dials, 0);
+  const connected = rows.reduce((n, r) => n + r.connected, 0);
+  const days = new Set(rows.map(r => r.day)).size;
+  return { dials, connected, days, perDay: days ? dials / days : 0 };
+}
+function byDay(rows: CallDay[]): { day: string; dials: number; connected: number }[] {
+  const m = new Map<string, { day: string; dials: number; connected: number }>();
+  for (const r of rows) {
+    const d = m.get(r.day) ?? { day: r.day, dials: 0, connected: 0 };
+    d.dials += r.dials; d.connected += r.connected;
+    m.set(r.day, d);
+  }
+  return [...m.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
+
+// Columns: one per day, or one per week (from Monday) when the range is over a month.
+const mondayOf = (day: string): string => {
+  const t = Date.parse(`${day}T12:00:00Z`);
+  const dow = (new Date(t).getUTCDay() + 6) % 7;
+  return new Date(t - dow * 86_400_000).toISOString().slice(0, 10);
+};
+type Line = { key: string; label: React.ReactNode; cells: Map<string, { dials: number; connected: number }>; dials: number; connected: number; child?: boolean };
+
+function CallsMade({ csr, calls, clients, since, until }: { csr: CsrKey; calls: CallActivity; clients: ClientOption[]; since: string; until: string }) {
+  const byId = useMemo(() => new Map(clients.map(c => [c.client_id, c])), [clients]);
+  const rows = callsFor(calls, csr);
+  const t = callTotals(rows);
+  const spanDays = Math.round((Date.parse(until) - Date.parse(since)) / 86_400_000) + 1;
+  const weekly = spanDays > 31;
+  const col = (day: string) => (weekly ? mondayOf(day) : day);
+  const cols = [...new Set(rows.map(r => col(r.day)))].sort();
+  const [open, setOpen] = useState<string | null>(null);
+
+  const line = (key: string, label: React.ReactNode, list: CallDay[], child = false): Line => {
+    const cells = new Map<string, { dials: number; connected: number }>();
+    for (const r of list) {
+      const c = cells.get(col(r.day)) ?? { dials: 0, connected: 0 };
+      c.dials += r.dials; c.connected += r.connected;
+      cells.set(col(r.day), c);
+    }
+    return { key, label, cells, dials: list.reduce((n, r) => n + r.dials, 0), connected: list.reduce((n, r) => n + r.connected, 0), child };
+  };
+  const clientLines = (list: CallDay[], prefix: string, child: boolean): Line[] => {
+    const ids = [...new Set(list.map(r => r.client_id))];
+    return ids.map(id => {
+      const c = byId.get(id);
+      return line(`${prefix}${id}`, c ? <span className="inline-flex items-center gap-2.5"><Badge c={c} /><span className="truncate">{c.client_name}</span></span> : <span className="text-fg-dim">Other account</span>, list.filter(r => r.client_id === id), child);
+    }).sort((a, b) => b.dials - a.dials);
+  };
+
+  let lines: Line[];
+  if (csr === 'team') {
+    const keys = [...new Set(rows.map(r => r.csr))];
+    lines = keys
+      .map(k => ({ k, l: line(k, <span className="font-semibold">{setterLabel(k)}</span>, rows.filter(r => r.csr === k)) }))
+      .sort((a, b) => b.l.dials - a.l.dials)
+      .flatMap(({ k, l }) => (open === k ? [l, ...clientLines(rows.filter(r => r.csr === k), `${k}|`, true)] : [l]));
+  } else {
+    lines = clientLines(rows, '', false);
+  }
+  const total = line('total', 'Total', rows);
+  const colLabel = (c: string) => {
+    const [y, m, d] = c.split('-').map(Number);
+    const dow = DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+    return weekly ? <><span className="block text-[9px] text-fg-dim">w/c</span>{d} {MONTHS[m - 1]}</> : <><span className="block text-[9px] text-fg-dim">{dow}</span>{d} {MONTHS[m - 1]}</>;
+  };
+  const cell = (v: { dials: number; connected: number } | undefined, strong = false) =>
+    v && v.dials ? (
+      <span title={`${plural(v.dials, 'dial')}, ${v.connected} connected`} className={cn('font-mono tabular-nums', strong ? 'font-semibold text-fg' : 'text-fg')}>{v.dials}</span>
+    ) : <span className="text-fg-dim">·</span>;
+
+  return (
+    <>
+      <section aria-label="Calls made summary" className="rounded-2xl border border-border bg-surface p-6">
+        <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">Calls made <InfoTip text={CALLS_DEFINITION} /></div>
+        <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+          <Stat label="Dials" value={t.dials} />
+          <Stat label="Connected" value={t.connected} dot="bg-green" sub={t.dials ? `${rateOf(t.connected, t.dials)}%` : undefined} />
+          <Stat label="Days with calls" value={t.days} />
+          <div>
+            <dt className="text-[11px] text-fg-muted">A day, on average</dt>
+            <dd className="mt-0.5 font-mono text-2xl font-semibold tabular-nums text-fg">{t.days ? num1(t.perDay) : '—'}</dd>
+          </div>
+        </dl>
+        <p className="mt-5 border-t border-border pt-3 text-xs text-fg-dim">{callsSyncNote(calls.syncedAt)}{weekly && ' Over a month is shown by week; pick a shorter range to see each day.'}</p>
+      </section>
+
+      <p className="text-sm text-fg-muted">
+        {csr === 'team' ? 'Dials per setter. Open a setter to see their accounts.' : 'Dials per account.'} Hover a number to see how many connected.
+      </p>
+
+      <div className="overflow-x-auto rounded-2xl border border-border bg-surface">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-[11px] uppercase tracking-wider text-fg-muted">
+              <th className="sticky left-0 z-[1] min-w-56 bg-surface px-5 py-3 text-left font-semibold">{csr === 'team' ? 'Setter' : 'Account'}</th>
+              {cols.map(c => <th key={c} className="whitespace-nowrap px-2 py-2 text-right text-[10px] font-semibold normal-case">{colLabel(c)}</th>)}
+              <th className="px-4 py-3 text-right font-semibold">Total</th>
+              <th className="px-4 py-3 text-right font-semibold">Connected</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map(l => {
+              const toggle = csr === 'team' && !l.child;
+              const isOpen = toggle && open === l.key;
+              return (
+                <tr key={l.key} onClick={toggle ? () => setOpen(isOpen ? null : l.key) : undefined}
+                  className={cn('border-b border-border/60', toggle && 'group cursor-pointer hover:bg-surface-2', isOpen && 'bg-surface-2', l.child && 'bg-bg/40 text-[13px]')}>
+                  <td className={cn('sticky left-0 z-[1] max-w-72 px-5 py-2.5', l.child ? 'bg-bg pl-10' : isOpen ? 'bg-surface-2' : 'bg-surface group-hover:bg-surface-2')}>
+                    <span className="flex items-center justify-between gap-2">
+                      {toggle ? <button aria-expanded={isOpen} className="text-left group-hover:text-pink">{l.label}</button> : l.label}
+                      {toggle && <ChevronDown size={14} className={cn('shrink-0 text-fg-dim transition-transform duration-200 ease-out', isOpen && 'rotate-180 text-pink')} />}
+                    </span>
+                  </td>
+                  {cols.map(c => <td key={c} className="px-2 py-2.5 text-right">{cell(l.cells.get(c), !l.child && csr === 'team')}</td>)}
+                  <td className="px-4 py-2.5 text-right font-mono font-semibold tabular-nums text-fg">{formatNumber(l.dials)}</td>
+                  <td className="px-4 py-2.5 text-right font-mono tabular-nums text-fg-muted">{formatNumber(l.connected)}</td>
+                </tr>
+              );
+            })}
+            {lines.length === 0 && <tr><td colSpan={cols.length + 3} className="px-5 py-12 text-center text-sm text-fg-dim">No calls in this range.</td></tr>}
+          </tbody>
+          {lines.length > 0 && (
+            <tfoot>
+              <tr className="text-[13px]">
+                <td className="sticky left-0 z-[1] bg-surface px-5 py-3 font-semibold text-fg">Total</td>
+                {cols.map(c => <td key={c} className="px-2 py-3 text-right">{cell(total.cells.get(c), true)}</td>)}
+                <td className="px-4 py-3 text-right font-mono font-bold tabular-nums text-fg">{formatNumber(total.dials)}</td>
+                <td className="px-4 py-3 text-right font-mono font-semibold tabular-nums text-fg-muted">{formatNumber(total.connected)}</td>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+    </>
   );
 }
 
