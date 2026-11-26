@@ -10,7 +10,7 @@ export const SPEED_TO_LEAD_MINUTES = 30;
 // left out. Shift times from Viktor's check-in are still read as they are.
 export const SPEED_DAY_START = '10:30';
 export const SPEED_WEEKDAYS_ONLY = true;
-export const SPEED_WINDOW_TEXT = `Measured Monday to Friday, from ${SPEED_DAY_START} until the end of the setter's shift.`;
+export const SPEED_WINDOW_TEXT = `Measured Monday to Friday, from ${SPEED_DAY_START} until the end of the setter's shift. Leads tagged unqualified on the day they came in are left out.`;
 
 // Speed to Lead standard (%): at or above it is on target, below it isn't. No tiers —
 // beating it is simply good. One place to change; every view reads this.
@@ -32,6 +32,18 @@ export const SPEED_EXCLUDED_LEADS: Record<string, string> = {
   WILQApbs6CHxwvQQZmOG: 'Skin and Heal, julia f, 2026-11-04 11:59: slipped through, taken out on request',
   '0BPIbXhFGgh9sZQC1qoV': 'Sciene London, ben hodgson, 2026-11-13 17:28: invalid number (+4475546623), taken out on request',
 };
+
+// Leads a setter tags "unqualified" on the day they came in (wrong area, not eligible,
+// no budget…) leave Speed to Lead: there was nothing to win, so the setter isn't scored on
+// them either way. A tag added on a later day doesn't count, so a lead can't be taken out
+// after the fact. GHL doesn't record when a tag was added, so "that day" is known when:
+//   • GHL shows the contact wasn't changed after its arrival day, or
+//   • the sync first saw the tag before UNQUALIFIED_SEEN_BY (London) the next morning
+//     (the 06:00 sync picks up everything tagged the day before).
+export const UNQUALIFIED_TAGS = ['unqualified'];
+export const UNQUALIFIED_SEEN_BY = '09:00';
+export const hasUnqualifiedTag = (tags: unknown): boolean =>
+  Array.isArray(tags) && tags.some(t => typeof t === 'string' && UNQUALIFIED_TAGS.includes(t.trim().toLowerCase()));
 
 // Confirmed bookings + Phone booking ratio on the CSR scorecard. These no longer come from
 // the (archived) in-dashboard booking log — they're synced daily from the Appointment

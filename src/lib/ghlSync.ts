@@ -1,5 +1,6 @@
 import { supabaseAdmin } from './supabase';
 import { replaceRows } from './replaceRows';
+import { hasUnqualifiedTag, UNQUALIFIED_TAGS } from './csrConstants';
 
 // Direct GHL → Supabase sync for a single client, using that client's Private
 // Integration Token (pit-…) stored in ghl_api_keys. Mirrors what the external pipeline
@@ -22,7 +23,7 @@ export type GhlSyncResult = {
 
 type GhlContact = {
   id: string; firstName?: string; lastName?: string; email?: string; phone?: string;
-  source?: string; tags?: string[]; dateAdded?: string; city?: string; country?: string;
+  source?: string; tags?: string[]; dateAdded?: string; dateUpdated?: string; city?: string; country?: string;
   customFields?: unknown[];
 };
 type GhlTxn = {
@@ -72,6 +73,21 @@ export async function syncClientGhl(locationId: string): Promise<GhlSyncResult> 
     startAfterId = meta.startAfterId ?? null;
   }
 
+  // When each contact's "unqualified" tag was first seen, carried over from earlier syncs
+  // (GHL doesn't date tags). Speed to Lead uses it to tell a same-day tag from a later one.
+  const seenUnq = new Map<string, string>();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabaseAdmin.from('ghl_contacts')
+      .select('source_id, seen:metadata->>unqualifiedSeenAt')
+      .eq('location_id', locationId)
+      .or(UNQUALIFIED_TAGS.map(t => `tags.cs.${JSON.stringify([t])}`).join(','))
+      .order('id')
+      .range(from, from + 999);
+    if (error) { console.warn('[sync] unqualified tag dates not read:', error.message); break; }
+    for (const r of (data ?? []) as { source_id: string; seen: string | null }[]) if (r.seen) seenUnq.set(r.source_id, r.seen);
+    if (!data || data.length < 1000) break;
+  }
+
   const contactRows = contacts.map(c => ({
     id: crypto.randomUUID(),
     source_id: c.id,
@@ -86,7 +102,11 @@ export async function syncClientGhl(locationId: string): Promise<GhlSyncResult> 
     pipeline_id: null,
     date_added: c.dateAdded ?? null,
     last_activity: null,
-    metadata: { city: c.city ?? null, country: c.country ?? null, customFields: c.customFields ?? [] },
+    metadata: {
+      city: c.city ?? null, country: c.country ?? null, customFields: c.customFields ?? [],
+      dateUpdated: c.dateUpdated ?? null,
+      ...(hasUnqualifiedTag(c.tags) ? { unqualifiedSeenAt: seenUnq.get(c.id) ?? now } : {}),
+    },
     _synced_at: now,
   }));
 

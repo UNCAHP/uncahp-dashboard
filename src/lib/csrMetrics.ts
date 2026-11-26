@@ -1,6 +1,6 @@
 import { supabase, supabaseAdmin } from './supabase';
 import type { DateRange } from './queries';
-import { SPEED_TO_LEAD_MINUTES, SPEED_DAY_START, SPEED_WEEKDAYS_ONLY, SPEED_EXCLUDED_LEADS, hasRefTag, isTrackedSetter } from './csrConstants';
+import { SPEED_TO_LEAD_MINUTES, SPEED_DAY_START, SPEED_WEEKDAYS_ONLY, SPEED_EXCLUDED_LEADS, UNQUALIFIED_SEEN_BY, hasRefTag, hasUnqualifiedTag, isTrackedSetter } from './csrConstants';
 import { isTestLead } from '@/lib/testLeads';
 import { getAssignmentHistory, ownerOn, ownersBetween } from './csrAssignments';
 
@@ -43,6 +43,16 @@ const londonDate = (iso: string): string => {
 };
 const londonClock = (iso: string): string =>
   new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
+
+// Was this lead tagged unqualified on the London day it arrived? See UNQUALIFIED_TAGS.
+const nextDay = (day: string): string => new Date(Date.parse(`${day}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+function unqualifiedThatDay(l: { tags: unknown; updated: string | null; unq_seen: string | null }, day: string): boolean {
+  if (!hasUnqualifiedTag(l.tags)) return false;
+  if (l.updated && londonDate(l.updated) <= day) return true;   // not touched since that day
+  if (!l.unq_seen) return false;
+  const seenDay = londonDate(l.unq_seen);
+  return seenDay <= day || (seenDay === nextDay(day) && londonClock(l.unq_seen) < UNQUALIFIED_SEEN_BY);
+}
 
 // Saturday or Sunday, for a London yyyy-mm-dd.
 export const isWeekend = (day: string): boolean => {
@@ -124,9 +134,9 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
   const assigned = new Map(clients.map(c => [c.client_id, c.csr]));
 
   const [contacts, calls, shifts, txns, history] = await Promise.all([
-    pageAll<{ location_id: string; source_id: string; first_name: string | null; last_name: string | null; email: string | null; date_added: string | null; phone: string | null; tags: unknown }>((f, t) =>
+    pageAll<{ location_id: string; source_id: string; first_name: string | null; last_name: string | null; email: string | null; date_added: string | null; phone: string | null; tags: unknown; updated: string | null; unq_seen: string | null }>((f, t) =>
       supabase.from('ghl_contacts')
-        .select('location_id, source_id, first_name, last_name, email, date_added, phone, tags')
+        .select('location_id, source_id, first_name, last_name, email, date_added, phone, tags, updated:metadata->>dateUpdated, unq_seen:metadata->>unqualifiedSeenAt')
         .in('location_id', ids)
         .gte('date_added', `${range.since}T00:00:00Z`)
         .lte('date_added', `${range.until}T23:59:59Z`)
@@ -195,6 +205,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
     if (l.source_id in SPEED_EXCLUDED_LEADS) continue; // taken out by hand
     const day = londonDate(l.date_added);
     const t = londonClock(l.date_added);
+    if (unqualifiedThatDay(l, day)) continue; // tagged unqualified the day it came in
     // The measured part of a shift runs from 10:30 (or its start, if later) to its end.
     const on = (byDay.get(day) ?? []).filter(s => t >= (s.start > SPEED_DAY_START ? s.start : SPEED_DAY_START) && t < s.end);
     if (on.length === 0) continue; // weekend, before 10:30, or nobody on shift → not measured
