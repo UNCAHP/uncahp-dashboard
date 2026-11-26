@@ -134,9 +134,9 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
   const assigned = new Map(clients.map(c => [c.client_id, c.csr]));
 
   const [contacts, calls, shifts, txns, history] = await Promise.all([
-    pageAll<{ location_id: string; source_id: string; first_name: string | null; last_name: string | null; email: string | null; date_added: string | null; phone: string | null; tags: unknown; updated: string | null; unq_seen: string | null }>((f, t) =>
+    pageAll<{ location_id: string; source_id: string; first_name: string | null; last_name: string | null; email: string | null; date_added: string | null; phone: string | null; tags: unknown; updated: string | null; unq_seen: string | null; stage_skip: unknown }>((f, t) =>
       supabase.from('ghl_contacts')
-        .select('location_id, source_id, first_name, last_name, email, date_added, phone, tags, updated:metadata->>dateUpdated, unq_seen:metadata->>unqualifiedSeenAt')
+        .select('location_id, source_id, first_name, last_name, email, date_added, phone, tags, updated:metadata->>dateUpdated, unq_seen:metadata->>unqualifiedSeenAt, stage_skip:metadata->stageSkip')
         .in('location_id', ids)
         .gte('date_added', `${range.since}T00:00:00Z`)
         .lte('date_added', `${range.until}T23:59:59Z`)
@@ -206,6 +206,7 @@ export async function evaluateLeads(clients: ClientAssign[], range: DateRange): 
     const day = londonDate(l.date_added);
     const t = londonClock(l.date_added);
     if (unqualifiedThatDay(l, day)) continue; // tagged unqualified the day it came in
+    if (Object.values((l.stage_skip ?? {}) as Record<string, string>).some(at => londonDate(at) === day)) continue; // moved to Manual (text only) / Unqualified that day
     // The measured part of a shift runs from 10:30 (or its start, if later) to its end.
     const on = (byDay.get(day) ?? []).filter(s => t >= (s.start > SPEED_DAY_START ? s.start : SPEED_DAY_START) && t < s.end);
     if (on.length === 0) continue; // weekend, before 10:30, or nobody on shift → not measured

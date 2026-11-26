@@ -1,6 +1,6 @@
 import { supabaseAdmin } from './supabase';
 import { replaceRows } from './replaceRows';
-import { hasUnqualifiedTag, UNQUALIFIED_TAGS } from './csrConstants';
+import { hasUnqualifiedTag, SPEED_SKIP_STAGES, stageKey } from './csrConstants';
 
 // Direct GHL → Supabase sync for a single client, using that client's Private
 // Integration Token (pit-…) stored in ghl_api_keys. Mirrors what the external pipeline
@@ -41,6 +41,38 @@ async function ghlGet(url: string, key: string): Promise<{ status: number; j: Re
 }
 const errMsg = (j: Record<string, unknown>) => (j.message ?? j.msg ?? 'error') as string;
 
+// Opportunities newest first, with their stage names, back to OPP_DAYS ago. Best-effort:
+// if the opportunities scope is off or a page fails, whatever was read is used.
+const OPP_DAYS = 100;
+type OppStage = { contactId: string | null; name: string; pipelineId: string; changedAt: string | null };
+export async function getStages(locationId: string, key: string): Promise<OppStage[]> {
+  const { status, j } = await ghlGet(`${V2}/opportunities/pipelines?locationId=${locationId}`, key);
+  if (status !== 200) { console.warn(`[sync] ${locationId} pipelines ${status}: ${errMsg(j)}`); return []; }
+  const names = new Map<string, string>();
+  for (const pl of (j.pipelines ?? []) as { stages?: { id: string; name: string }[] }[])
+    for (const st of pl.stages ?? []) names.set(st.id, st.name);
+
+  const cutoff = new Date(Date.now() - OPP_DAYS * 86_400_000).toISOString();
+  const out: OppStage[] = [];
+  let next = `${V2}/opportunities/search?location_id=${locationId}&limit=100`;
+  for (let guard = 0; guard < 200; guard++) {
+    const r = await ghlGet(next, key);
+    if (r.status !== 200) { console.warn(`[sync] ${locationId} opportunities ${r.status}: ${errMsg(r.j)}`); break; }
+    const batch = (r.j.opportunities ?? []) as { contactId?: string; pipelineId?: string; pipelineStageId?: string; lastStageChangeAt?: string; createdAt?: string }[];
+    for (const o of batch) out.push({
+      contactId: o.contactId ?? null,
+      name: names.get(o.pipelineStageId ?? '') ?? '',
+      pipelineId: o.pipelineId ?? '',
+      changedAt: o.lastStageChangeAt ?? o.createdAt ?? null,
+    });
+    const meta = (r.j.meta ?? {}) as { startAfter?: number; startAfterId?: string };
+    const oldest = batch.at(-1)?.createdAt;
+    if (batch.length < 100 || !meta.startAfterId || (oldest && oldest < cutoff)) break;
+    next = `${V2}/opportunities/search?location_id=${locationId}&limit=100&startAfter=${meta.startAfter}&startAfterId=${meta.startAfterId}`;
+  }
+  return out;
+}
+
 export async function syncClientGhl(locationId: string): Promise<GhlSyncResult> {
   if (!locationId) return { ok: false, error: 'Missing client id.' };
 
@@ -73,20 +105,40 @@ export async function syncClientGhl(locationId: string): Promise<GhlSyncResult> 
     startAfterId = meta.startAfterId ?? null;
   }
 
-  // When each contact's "unqualified" tag was first seen, carried over from earlier syncs
-  // (GHL doesn't date tags). Speed to Lead uses it to tell a same-day tag from a later one.
-  const seenUnq = new Map<string, string>();
+  // What Speed to Lead needs to know about each contact, carried over from earlier syncs:
+  //   unqualifiedSeenAt: when the "unqualified" tag was first seen (GHL doesn't date tags)
+  //   stageSkip:         { manual | unqualified → when the lead was moved into that stage }
+  type Kept = { unqualifiedSeenAt?: string; stageSkip?: Record<string, string> };
+  const kept = new Map<string, Kept>();
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabaseAdmin.from('ghl_contacts')
-      .select('source_id, seen:metadata->>unqualifiedSeenAt')
+      .select('source_id, seen:metadata->>unqualifiedSeenAt, skip:metadata->stageSkip')
       .eq('location_id', locationId)
-      .or(UNQUALIFIED_TAGS.map(t => `tags.cs.${JSON.stringify([t])}`).join(','))
+      .or('metadata->>unqualifiedSeenAt.not.is.null,metadata->stageSkip.not.is.null')
       .order('id')
       .range(from, from + 999);
-    if (error) { console.warn('[sync] unqualified tag dates not read:', error.message); break; }
-    for (const r of (data ?? []) as { source_id: string; seen: string | null }[]) if (r.seen) seenUnq.set(r.source_id, r.seen);
+    if (error) { console.warn('[sync] earlier Speed to Lead dates not read:', error.message); break; }
+    for (const r of (data ?? []) as { source_id: string; seen: string | null; skip: Record<string, string> | null }[])
+      kept.set(r.source_id, { unqualifiedSeenAt: r.seen ?? undefined, stageSkip: r.skip ?? undefined });
     if (!data || data.length < 1000) break;
   }
+
+  // Pipeline stage of each contact's newest opportunity, from the last ~100 days.
+  const stages = await getStages(locationId, key);
+  const stageOf = new Map<string, { name: string; pipelineId: string; changedAt: string | null }>();
+  for (const o of stages) if (o.contactId && !stageOf.has(o.contactId)) stageOf.set(o.contactId, o);
+
+  const speedMeta = (c: GhlContact) => {
+    const prev = kept.get(c.id) ?? {};
+    const out: Kept = {};
+    if (hasUnqualifiedTag(c.tags)) out.unqualifiedSeenAt = prev.unqualifiedSeenAt ?? now;
+    const skip = { ...(prev.stageSkip ?? {}) };
+    const st = stageOf.get(c.id);
+    const k = stageKey(st?.name);
+    if (st && SPEED_SKIP_STAGES.includes(k) && !skip[k]) skip[k] = st.changedAt ?? now;
+    if (Object.keys(skip).length) out.stageSkip = skip;
+    return out;
+  };
 
   const contactRows = contacts.map(c => ({
     id: crypto.randomUUID(),
@@ -98,14 +150,14 @@ export async function syncClientGhl(locationId: string): Promise<GhlSyncResult> 
     phone: c.phone ?? null,
     source: c.source ?? null,
     tags: Array.isArray(c.tags) ? c.tags : [],
-    pipeline_stage: null,
-    pipeline_id: null,
+    pipeline_stage: stageOf.get(c.id)?.name ?? null,
+    pipeline_id: stageOf.get(c.id)?.pipelineId ?? null,
     date_added: c.dateAdded ?? null,
     last_activity: null,
     metadata: {
       city: c.city ?? null, country: c.country ?? null, customFields: c.customFields ?? [],
       dateUpdated: c.dateUpdated ?? null,
-      ...(hasUnqualifiedTag(c.tags) ? { unqualifiedSeenAt: seenUnq.get(c.id) ?? now } : {}),
+      ...speedMeta(c),
     },
     _synced_at: now,
   }));

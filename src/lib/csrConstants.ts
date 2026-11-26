@@ -10,7 +10,7 @@ export const SPEED_TO_LEAD_MINUTES = 30;
 // left out. Shift times from Viktor's check-in are still read as they are.
 export const SPEED_DAY_START = '10:30';
 export const SPEED_WEEKDAYS_ONLY = true;
-export const SPEED_WINDOW_TEXT = `Measured Monday to Friday, from ${SPEED_DAY_START} until the end of the setter's shift. Leads tagged unqualified on the day they came in are left out.`;
+export const SPEED_WINDOW_TEXT = `Measured Monday to Friday, from ${SPEED_DAY_START} until the end of the setter's shift. Leads tagged unqualified, or moved to the Manual (text only) or Unqualified stage, on the day they came in are left out.`;
 
 // Speed to Lead standard (%): at or above it is on target, below it isn't. No tiers —
 // beating it is simply good. One place to change; every view reads this.
@@ -41,6 +41,15 @@ export const SPEED_EXCLUDED_LEADS: Record<string, string> = {
 //   • the sync first saw the tag before UNQUALIFIED_SEEN_BY (London) the next morning
 //     (the 06:00 sync picks up everything tagged the day before).
 export const UNQUALIFIED_TAGS = ['unqualified'];
+
+// Pipeline stages that take a lead out the same way, when it's moved into one on the day
+// it came in: "Manual" holds leads who only want to be texted (no call), "Unqualified"
+// the ones there's nothing to book. Matched on the stage name, ignoring emoji and case,
+// so every client's copy of the pipeline counts. The sync keeps the time a lead was moved
+// into one even after it moves on, so a later stage change doesn't bring it back.
+export const SPEED_SKIP_STAGES = ['manual', 'unqualified'];
+export const stageKey = (name: string | null | undefined): string =>
+  String(name ?? '').toLowerCase().replace(/[^a-z ]/g, '').trim();
 export const UNQUALIFIED_SEEN_BY = '09:00';
 export const hasUnqualifiedTag = (tags: unknown): boolean =>
   Array.isArray(tags) && tags.some(t => typeof t === 'string' && UNQUALIFIED_TAGS.includes(t.trim().toLowerCase()));
