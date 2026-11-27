@@ -42,6 +42,31 @@ export async function markClientFinished(runId: string | null, clientId: string,
   if (error) console.warn('[sync] could not mark client finished:', error.message);
 }
 
+// Work that runs once after every client in a run has finished (e.g. the Notion sync).
+// Several clients can finish at the same moment, so the step is claimed by inserting a
+// marker row: the (run_id, client_id) key lets only one invocation win.
+const STEP_PREFIX = '__step:';
+
+export async function claimRunStep(runId: string | null, step: string): Promise<boolean> {
+  if (!runId) return false;
+  const [{ data: run }, { data: rows }] = await Promise.all([
+    supabaseAdmin.from('sync_runs').select('clients_total').eq('id', runId).maybeSingle(),
+    supabaseAdmin.from('sync_run_clients').select('client_id, finished_at').eq('run_id', runId),
+  ]);
+  if (!run) return false;
+  const clients = ((rows ?? []) as { client_id: string; finished_at: string | null }[]).filter(r => !r.client_id.startsWith(STEP_PREFIX));
+  if (clients.length < (run as { clients_total: number }).clients_total || clients.some(r => !r.finished_at)) return false;
+  const { error } = await supabaseAdmin.from('sync_run_clients')
+    .insert({ run_id: runId, client_id: `${STEP_PREFIX}${step}`, client_name: step, started_at: new Date().toISOString() });
+  return !error; // a duplicate key means another client already claimed it
+}
+
+export async function finishRunStep(runId: string, step: string, ok: boolean, err: string | null) {
+  await supabaseAdmin.from('sync_run_clients')
+    .update({ finished_at: new Date().toISOString(), ok, error: err })
+    .eq('run_id', runId).eq('client_id', `${STEP_PREFIX}${step}`);
+}
+
 export async function getSyncStatus(): Promise<SyncStatus> {
   try {
     const since = new Date(Date.now() - RUN_WINDOW_MS).toISOString();
@@ -56,7 +81,8 @@ export async function getSyncStatus(): Promise<SyncStatus> {
     const { data: rows } = await supabaseAdmin.from('sync_run_clients')
       .select('client_id, client_name, finished_at')
       .eq('run_id', r.id);
-    const list = (rows ?? []) as { client_id: string; client_name: string | null; finished_at: string | null }[];
+    const list = ((rows ?? []) as { client_id: string; client_name: string | null; finished_at: string | null }[])
+      .filter(x => !x.client_id.startsWith(STEP_PREFIX));
     const done = list.filter(x => x.finished_at).length;
     const pending = list.filter(x => !x.finished_at).map(x => x.client_name ?? x.client_id);
     const total = Math.max(r.clients_total, list.length);

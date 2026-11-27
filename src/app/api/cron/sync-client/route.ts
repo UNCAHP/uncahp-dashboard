@@ -1,7 +1,9 @@
 import { syncClientMeta, type MetaSyncResult } from '@/lib/metaSync';
 import { syncClientGhl, type GhlSyncResult } from '@/lib/ghlSync';
 import { syncClientCalls, callsWindowDays, type CallsSyncResult } from '@/lib/callsSync';
-import { markClientStarted, markClientFinished } from '@/lib/syncStatus';
+import { after } from 'next/server';
+import { markClientStarted, markClientFinished, claimRunStep, finishRunStep } from '@/lib/syncStatus';
+import { syncOffersToNotion } from '@/lib/notionSync';
 
 // Syncs ONE client's Meta ads + GHL contacts/transactions + recent calls — all together.
 // Invoked (fanned out) by the daily dispatcher, one invocation per client, so each gets
@@ -36,5 +38,14 @@ export async function GET(req: Request) {
   const ok = meta.ok || ghl.ok || calls.ok;
   const errs = [meta, ghl, calls].map(r => (r.ok ? null : r.error)).filter(Boolean).join(' · ') || null;
   await markClientFinished(runId, loc, ok, errs);
+
+  // The last client of the daily run to finish also refreshes the Live Offers table in
+  // Notion (on top of its own 3-hourly schedule), after the response is sent.
+  after(async () => {
+    if (!runId || !process.env.NOTION_TOKEN || !(await claimRunStep(runId, 'notion'))) return;
+    const res = await syncOffersToNotion();
+    console.log('[sync] notion after daily run:', JSON.stringify(res));
+    await finishRunStep(runId, 'notion', res.ok, res.error ?? null);
+  });
   return Response.json({ ok, meta, ghl, calls });
 }
